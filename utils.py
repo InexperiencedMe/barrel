@@ -13,9 +13,8 @@ class UnityInterface():
             obsSpecs = self.env.behavior_specs[behavior].observation_specs
             behaviorSpecs["AgentsCount"] = self.countAgents(behavior)
             behaviorSpecs["Observations"] = [obsSpecs[i].shape for i in range(len(obsSpecs))]
-            behaviorSpecs["ContinuousActionSize"] = self.env.behavior_specs[behavior].action_spec.continuous_size
-            behaviorSpecs["DiscreteActionSize"] = self.env.behavior_specs[behavior].action_spec.discrete_size # Not needed
-            behaviorSpecs["DiscreteBranches"] = self.env.behavior_specs[behavior].action_spec.discrete_branches
+            behaviorSpecs["ContinuousActions"] = self.env.behavior_specs[behavior].action_spec.continuous_size
+            behaviorSpecs["DiscreteActions"] = self.env.behavior_specs[behavior].action_spec.discrete_branches
             self.specs[behavior] = behaviorSpecs
         
     def getSpecs(self, behaviorName=None):
@@ -31,10 +30,10 @@ class UnityInterface():
         decisionSteps, terminalSteps = self.env.get_steps(behaviorName)
         return decisionSteps, terminalSteps
 
-    def step(self, actionsDict):
-        for agent, action in actionsDict.items():
-            action = ActionTuple(continuous=action["continuous"], discrete=action["discrete"])
-            self.env.set_actions(agent, action)
+    def setActions(self, behaviorName, continuousActions = None, discreteActions = None):
+        self.env.set_actions(behaviorName, ActionTuple(continuous=continuousActions, discrete=discreteActions))
+
+    def step(self):
         self.env.step()
 
     def reset(self):
