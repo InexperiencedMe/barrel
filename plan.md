@@ -28,3 +28,6 @@ class actor(nn.Module):
     def addMemory()
     def evaluateState() for q networks
 
+    ! Memory should know how much memories is being put in !
+    Make it just multiple big tensors of memories for each category
+
