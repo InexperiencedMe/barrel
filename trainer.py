@@ -27,6 +27,8 @@ for i in range(1, totalSteps+1):
         if nrOfDiscreteActions > 0:
             behaviorActions["discrete"] = np.zeros((len(agentsThatRequestAction), nrOfDiscreteActions), dtype=np.int32)
 
+        
+
         env.setActions(behavior, behaviorActions['continuous'], behaviorActions['discrete'])
         env.step()
 env.close()
