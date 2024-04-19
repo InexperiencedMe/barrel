@@ -1,6 +1,9 @@
 import numpy as np
 import torch
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
+import torch.nn as nn
+import torch.optim as optim
+import torch.functional as F
 
 class UnityInterface():
     def __init__(self, envName=None):
@@ -56,3 +59,45 @@ class UnityInterface():
     def addExperiences(self):
         pass
 
+def linearInitialize(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+class PPO(nn.Module):
+    def __init__(self, envSpecs):
+        super(PPO, self).__init__()
+        self.preCritic1D = nn.Sequential(
+            linearInitialize(nn.Linear(obsSize1D, 256)), nn.Tanh(),
+            linearInitialize(nn.Linear(256, 128)), nn.Tanh(),
+            linearInitialize(nn.Linear(128, 64)), nn.Tanh())
+        
+        # TODO: Check if 3D obs exist
+        self.preCritic3D = nn.Sequential(
+            linearInitialize(nn.Conv2d(obs3Dchannels, 32, 8, stride=4)), nn.Tanh(),
+            linearInitialize(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
+            linearInitialize(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
+
+         
+        self.criticFinal = nn.Sequential(linearInitialize(nn.Linear(64 + preCritic3DoutputSize, 1), std=0.01))
+
+        self.preActor1D = nn.Sequential(
+            linearInitialize(nn.Linear(obsSize1D, 256)), nn.Tanh(),
+            linearInitialize(nn.Linear(256, 128)), nn.Tanh(),
+            linearInitialize(nn.Linear(128, 64)), nn.Tanh())
+        
+        self.preActor3D = nn.Sequential(
+            linearInitialize(nn.Conv2d(obs3Dchannels, 32, 8, stride=4)), nn.Tanh(),
+            linearInitialize(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
+            linearInitialize(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
+            
+        self.actorContinuous = nn.Sequential(
+            linearInitialize(nn.Linear((64 + preActor3DoutputSize, 64), 256)), nn.Tanh(),
+            linearInitialize(nn.Linear(64, continuousActionSize), std=0.01))
+        self.actorLogStd = nn.Parameter(torch.zeros(continuousActionSize))
+
+        self.actorDiscrete = []
+        for discreteActionSize in discreteBranches:
+            self.actorDiscrete.append(nn.Sequential(
+            linearInitialize(nn.Linear((64, 64), 256)), nn.Tanh(),
+            linearInitialize(nn.Linear(64, discreteActionSize), std=0.01)))
