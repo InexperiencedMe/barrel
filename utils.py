@@ -144,7 +144,15 @@ class PPO(nn.Module):
         return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1), self.critic(x)
 
     def processObservations(self, x):
-        # TODO: Get any observations. Extract 1D and 3D observations out of it and return it
-        # if only 1 type of obs, the other one should be returned as tensor of size (0,)
-        pass
-        # return obs1D, obs3D
+        obs1D = torch.zeros((0,))
+        obs3D = torch.zeros((0,))
+        for observation in x:
+            observation = torch.tensor(observation)
+            if len(observation.shape) == 1:
+                obs1D = torch.cat((obs1D, observation))
+            elif len(observation.shape) == 3:
+                obs3D = torch.cat((obs3D, observation))
+            else:
+                print(f"Unexpected {len(observation.shape)}-dimensional observation")
+        # TODO: Put it on device?
+        return obs1D, obs3D
