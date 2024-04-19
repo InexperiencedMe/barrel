@@ -4,6 +4,8 @@ from mlagents_envs.environment import UnityEnvironment, ActionTuple
 import torch.nn as nn
 import torch.optim as optim
 import torch.functional as F
+from torch.distributions.categorical import Categorical
+from torch.distributions.normal import Normal
 
 class UnityInterface():
     def __init__(self, envName=None):
@@ -78,8 +80,8 @@ class PPO(nn.Module):
             linearInitialize(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
             linearInitialize(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
 
-         
         self.criticFinal = nn.Sequential(linearInitialize(nn.Linear(64 + preCritic3DoutputSize, 1), std=0.01))
+
 
         self.preActor1D = nn.Sequential(
             linearInitialize(nn.Linear(obsSize1D, 256)), nn.Tanh(),
@@ -92,12 +94,57 @@ class PPO(nn.Module):
             linearInitialize(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
             
         self.actorContinuous = nn.Sequential(
-            linearInitialize(nn.Linear((64 + preActor3DoutputSize, 64), 256)), nn.Tanh(),
+            linearInitialize(nn.Linear(64 + preActor3DoutputSize, 64)), nn.Tanh(),
             linearInitialize(nn.Linear(64, continuousActionSize), std=0.01))
         self.actorLogStd = nn.Parameter(torch.zeros(continuousActionSize))
 
         self.actorDiscrete = []
         for discreteActionSize in discreteBranches:
             self.actorDiscrete.append(nn.Sequential(
-            linearInitialize(nn.Linear((64, 64), 256)), nn.Tanh(),
-            linearInitialize(nn.Linear(64, discreteActionSize), std=0.01)))
+            linearInitialize(nn.Linear(64, 64), nn.Tanh(),
+            linearInitialize(nn.Linear(64, discreteActionSize), std=0.01))))
+
+    def evaluateState(self, x):
+        obs1D, obs3D = self.processObservations(x)
+        return self.criticFinal(torch.cat((self.preCritic1D(obs1D), self.preCritic3D(obs3D))))
+    
+    def getDiscreteActionAndValue(self, x, action=None):
+        obs1D, obs3D = self.processObservations(x)
+        observationFeatures = torch.cat((self.preActor1D(obs1D), self.preActor3D(obs3D)))
+
+        if action is None:
+            actionTemp = []
+        else:
+            actionTemp = action
+            
+        logProbs = []
+        entropies = []
+        for discreteAction in range(discreteActionSize):
+            logits = self.actorDiscrete(observationFeatures)
+            probabilities = Categorical(logits=logits)
+            if action is None:
+                actionTemp.append(probabilities.sample())
+                logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
+                logProbs.append(probabilities.entropy())
+        return actionTemp, torch.tensor(logProbs).sum(-1), torch.tensor(entropies).sum(-1), self.evaluateState(x)
+    
+    def getContinuousActionAndValue(self, x, action=None, evaluation=False):
+        obs1D, obs3D = self.processObservations(x)
+        observationFeatures = torch.cat((self.preActor1D(obs1D), self.preActor3D(obs3D)))
+
+        actionMean = self.actorContinuous(observationFeatures)
+        actionLogStd = self.actorLogStd.expand_as(actionMean)
+        actionStd = torch.exp(actionLogStd)
+        probabilities = Normal(actionMean, actionStd)
+        if action is None:
+            if evaluation == True:
+                action = actionMean
+            else:
+                action = probabilities.rsample()
+        return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1), self.critic(x)
+
+    def processObservations(self, x):
+        # TODO: Get any observations. Extract 1D and 3D observations out of it and return it
+        # if only 1 type of obs, the other one should be returned as tensor of size (0,)
+        pass
+        # return obs1D, obs3D
