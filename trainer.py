@@ -9,21 +9,19 @@ env = UnityInterface(None)
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 agents = {}
-for behavior in behaviorNames:
-    agents[behavior] = PPO(env.getSpecs(behavior))
-
+memory = {}
 rewards = {}
 for behavior in behaviorNames:
+    agents[behavior] = PPO(env.getSpecs(behavior))
+    memory[behavior] = Memory(5)
     rewards[behavior] = np.zeros((env.getSpecs(behavior)["AgentsCount"]))
 
 totalSteps = 10
 for i in range(1, totalSteps+1):
     for behavior in behaviorNames:
         decisionSteps, terminalSteps = env.getSteps(behavior)
-        agentsThatRequestAction = list(decisionSteps)
-        agentsThatFinished = list(terminalSteps)
         # print(f"Agents that request an action {len(decisionSteps)}. Agents that finished: {len(terminalSteps)}")
-        print(f"Agents that request an action {agentsThatRequestAction}. Agents that finished: {agentsThatFinished}")
+        # print(f"Agents that request an action {agentsThatRequestAction}. Agents that finished: {agentsThatFinished}")
         
         behaviorActions = {"continuous": None, "discrete": None} # This is agent's part
         specs = env.getSpecs(behavior)
@@ -35,10 +33,10 @@ for i in range(1, totalSteps+1):
             behaviorActions["discrete"] = np.zeros((len(agentsThatRequestAction), nrOfDiscreteActions), dtype=np.int32)
 
 
-        if len(agentsThatRequestAction) > 0:
+        if len(decisionSteps) > 0:
             observations = []
-            for agent in agentsThatRequestAction: # rewards handling
-                print(f"Checking agent {agent} in from Agent that request an action {agentsThatRequestAction} and we want to add its reward {decisionSteps[agent].reward} to our tensor rewards of size {rewards[behavior].shape}")
+            for agent in decisionSteps: # rewards handling
+                print(f"Checking agent {agent} in from Agent that request an action {list(decisionSteps)} and we want to add its reward {decisionSteps[agent].reward} to our tensor rewards of size {rewards[behavior].shape}")
                 rewards[behavior][agent] += decisionSteps[agent].reward 
                 observations.append(decisionSteps[agent].obs)
             
@@ -47,15 +45,18 @@ for i in range(1, totalSteps+1):
             for element in observations[0]:
                 obsShapes.append(element.shape)
                 obsDimensionalites.append(len(element.shape))
-            print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
+            # print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
 
-            print(f"Continuous action {agents[behavior].getContinuousActionAndValue(observations[0])[0]}")
-            print(f"Discrete action {agents[behavior].getDiscreteActionAndValue(observations[0])[0]}")
-            for agent in agentsThatFinished:
+            # print(f"Continuous action {agents[behavior].getContinuousActionAndValue(observations[0])[0]}")
+            # print(f"Discrete action {agents[behavior].getDiscreteActionAndValue(observations[0])[0]}")
+            for agent in terminalSteps:
                 rewards[behavior][agent] += terminalSteps[agent].reward
                 print(f"Final reward: {rewards[behavior][agent]:.2f}")
                 rewards[behavior][agent] = 0
 
             env.setActions(behavior, behaviorActions['continuous'], behaviorActions['discrete'])
-        env.step()
+    env.step()
+
+
+
 env.close()

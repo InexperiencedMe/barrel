@@ -6,6 +6,8 @@ import torch.optim as optim
 import torch.functional as F
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
+from collections import deque, namedtuple
+import random
 
 class UnityInterface():
     def __init__(self, envName=None):
@@ -210,4 +212,24 @@ class PPO(nn.Module):
         if self.using3Dobs:
             netsOutputs.append(self.preActor3D(obs3D))
         return torch.cat(netsOutputs)
+    
+class Memory(object):
+    def __init__(self, capacity, fieldNames="observations, actions, rewards, dones, nextObservations"):
+        self.fieldNames = namedtuple("fieldNames", fieldNames)
+        self.memory = deque(maxlen=capacity)
+
+    def pushSingle(self, observation, action, reward, done, nextObservation):
+        self.memory.append(self.fieldNames(observation, action, reward, done, nextObservation))
+
+    def pushMultiple(self, observations, actions, rewards, dones, nextObservations):
+        # TODO: could improve performance or clarity with memory.extend(iterable)
+        for i in range(len(observations)):
+            self.memory.append(self.fieldNames(self.memory.append(self.fieldNames(observations[i], actions[i], rewards[i], dones[i], nextObservations[i]))))
+
+    def sample(self, batchSize):
+        sampledEntries = random.sample(self.memory, batchSize)
+        return self.fieldNames(*zip(*sampledEntries))
+
+    def __len__(self):
+        return len(self.memory)
     
