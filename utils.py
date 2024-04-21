@@ -57,13 +57,17 @@ class UnityInterface():
         decisionSteps, terminalSteps = self.getSteps(behaviorName)
         agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         print(f"For behavior {behaviorName} we have {agentsCount} agents in total")
-        return 24
-    
-    def initializeMemory(self):
-        pass
+        # NOTE: Doesn't work for WallJump :( You have 2 policies for 1 agent there
+        # NOTE: I have no better way of predetermining agentCount for inactive agents
+        return agentsCount
 
-    def addExperiences(self):
-        pass
+    def getInitialObservations(self, behaviorName, bufferList):
+        decisionSteps, terminalSteps = self.env.get_steps(behaviorName)
+        assert len(terminalSteps) == 0, "Terminal step at the very beginning. Breaks initial obs buffer"
+        for agentNr in decisionSteps:
+            bufferList[agentNr] = decisionSteps[agentNr].obs
+        print(f"Returning initial observations with {sum(obs is None for obs in bufferList)} None elements")
+        return bufferList
 
 def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -128,6 +132,7 @@ class PPO(nn.Module):
         obs1D, obs3D = self.processObservations(x)
         return self.criticFinal(self.getObservationFeaturesForCritic(obs1D, obs3D))
     
+    # TODO: Should combine the 2 action types and return empty action if not needed
     def getDiscreteActionAndValue(self, x, action=None):
         obs1D, obs3D = self.processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
@@ -147,6 +152,7 @@ class PPO(nn.Module):
                 actionTemp.append(probabilities.sample())
                 logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
                 logProbs.append(probabilities.entropy())
+        # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
         return actionTemp, torch.tensor(logProbs).sum(-1), torch.tensor(entropies).sum(-1), self.evaluateState(x)
     
     def getContinuousActionAndValue(self, x, action=None, evaluation=False):
@@ -162,6 +168,7 @@ class PPO(nn.Module):
                 action = actionMean
             else:
                 action = probabilities.rsample()
+        # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
         return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1), self.evaluateState(x)
 
     def processObservations(self, x):
@@ -223,6 +230,7 @@ class Memory(object):
 
     def pushMultiple(self, observations, actions, rewards, dones, nextObservations):
         # TODO: could improve performance or clarity with memory.extend(iterable)
+        # NOTE: Unused for now?
         for i in range(len(observations)):
             self.memory.append(self.fieldNames(self.memory.append(self.fieldNames(observations[i], actions[i], rewards[i], dones[i], nextObservations[i]))))
 
