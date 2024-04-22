@@ -225,14 +225,8 @@ class Memory(object):
         self.fieldNames = namedtuple("fieldNames", fieldNames)
         self.memory = deque(maxlen=capacity)
 
-    def pushSingle(self, observation, action, reward, done, nextObservation):
+    def push(self, observation, action, reward, done, nextObservation):
         self.memory.append(self.fieldNames(observation, action, reward, done, nextObservation))
-
-    def pushMultiple(self, observations, actions, rewards, dones, nextObservations):
-        # TODO: could improve performance or clarity with memory.extend(iterable)
-        # NOTE: Unused for now?
-        for i in range(len(observations)):
-            self.memory.append(self.fieldNames(self.memory.append(self.fieldNames(observations[i], actions[i], rewards[i], dones[i], nextObservations[i]))))
 
     def sample(self, batchSize):
         sampledEntries = random.sample(self.memory, batchSize)
