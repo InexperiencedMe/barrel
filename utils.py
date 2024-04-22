@@ -61,11 +61,12 @@ class UnityInterface():
         # NOTE: I have no better way of predetermining agentCount for inactive agents
         return agentsCount
 
-    def getInitialObservations(self, behaviorName, bufferList):
-        decisionSteps, terminalSteps = self.env.get_steps(behaviorName)
-        assert len(terminalSteps) == 0, "Terminal step at the very beginning. Breaks initial obs buffer"
-        for agentNr in decisionSteps:
-            bufferList[agentNr] = decisionSteps[agentNr].obs
+    def getInitialObservations(self, bufferList):
+        for behavior in self.behaviorNames:
+            decisionSteps, _ = self.env.get_steps(behavior)
+            for agentNr in decisionSteps:
+                bufferList[agentNr] = decisionSteps[agentNr].obs
+        print(f"Returning initial observations with {sum(obs is None for obs in bufferList)} None elements")
         return bufferList
 
 def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
@@ -183,7 +184,7 @@ class PPO(nn.Module):
             else:
                 print(f"Unexpected {len(observation.shape)}-dimensional observation")
         # TODO: Put it on device?
-        print(f"processObservations returning obs1D of shape {obs1D.shape} abd obs3D of shape {obs3D.shape}")
+        # print(f"processObservations returning obs1D of shape {obs1D.shape} abd obs3D of shape {obs3D.shape}")
         return obs1D, obs3D
     
     def getObsSizes(self, specs):
@@ -213,7 +214,7 @@ class PPO(nn.Module):
     def getObservationFeaturesForActor(self, obs1D, obs3D):
         netsOutputs = []
         if self.using1Dobs:
-            print(f"Trying to feed preActor1D an input of shape {obs1D.shape} while obsSize1D is {self.obsSize1D}")
+            # print(f"Trying to feed preActor1D an input of shape {obs1D.shape} while obsSize1D is {self.obsSize1D}")
             netsOutputs.append(self.preActor1D(obs1D))
         if self.using3Dobs:
             netsOutputs.append(self.preActor3D(obs3D))

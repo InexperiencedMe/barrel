@@ -9,75 +9,81 @@ env = UnityInterface(None)
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 agents, memory, rewards, observationBuffer, actionsBuffer = {}, {}, {}, {}, {}
+
+totalAgentsCounts = 0
+for behavior in behaviorNames:
+    totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
+    
+# NOTE: rewards, observations and actions are common for all behaviors
+rewards = np.zeros(totalAgentsCounts)
+observationBuffer = [None] * totalAgentsCounts
+for i in range(totalAgentsCounts):
+    actionsBuffer[i] = {'continuous': None, 'discrete': None}
+observationBuffer = env.getInitialObservations(observationBuffer)
+
 for behavior in behaviorNames:
     agents[behavior] = PPO(env.getSpecs(behavior))
     memory[behavior] = Memory(5)
-    rewards[behavior] = np.zeros((env.getSpecs(behavior)["AgentsCount"]))
-    observationBuffer[behavior] = [None] * env.getSpecs(behavior)["AgentsCount"]
-    actionsBuffer[behavior] = {}
-    for i in range(env.getSpecs(behavior)["AgentsCount"]):
-        actionsBuffer[behavior][i] = {'continuous': None, 'discrete': None}
-    observationBuffer[behavior] = env.getInitialObservations(behavior, observationBuffer)
     
 
-totalSteps = 10
+totalSteps = 100
 for i in range(1, totalSteps+1):
-    decisionSteps, terminalSteps = env.getSteps(behavior)
-    for behavior in behaviorNames:
+    with torch.no_grad():
+        for behavior in behaviorNames:
+            decisionSteps, terminalSteps = env.getSteps(behavior)
+            # print(f"For behavior {behavior} in step {i}/{totalSteps} we have decisionSteps agents {list(decisionSteps)} and terminal steps {list(terminalSteps)}")
+            observationsThatNeedAction = []
+            for agent in decisionSteps:
+                observation = decisionSteps[agent].obs
+                observationsThatNeedAction.append(observation)
+                reward = decisionSteps[agent].reward
+                lastObservation = observationBuffer[agent]
+                lastAction = actionsBuffer[agent]
+                if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
+                    memory[behavior].push(lastObservation, lastAction, reward, False, observation)
+                    observationBuffer[agent] = observation
+                rewards[agent] += reward
+                
+            for agent in terminalSteps:
+                observation = terminalSteps[agent].obs
+                reward = terminalSteps[agent].reward
+                lastObservation = observationBuffer[agent]
+                lastAction = actionsBuffer[agent]
+                if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
+                    memory[behavior].push(lastObservation, lastAction, reward, True, observation)
+                    observationBuffer[agent] = None
+                rewards[agent] += reward
+                print(f"Final reward: {rewards[agent]}")
+                rewards[agent] = 0
 
-        observationsThatNeedAction = []
-        for agent in decisionSteps:
-            observation = decisionSteps[agent].obs
-            observationsThatNeedAction.append(observation)
-            reward = decisionSteps[agent].reward
-            lastObservation = observationBuffer[behavior][agent]
-            # BUG KeyError: 17 for SoccerTwos. HOW TO HANDLE DIFFERENT TEAMS? Unity gives them IDs together
-            lastAction = actionsBuffer[behavior][agent]
-            if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
-                memory[behavior].push(lastObservation, lastAction, reward, False, observation)
-                observationBuffer[behavior][agent] = observation
-            rewards[behavior][agent] += reward
             
-        for agent in terminalSteps:
-            observation = terminalSteps[agent].obs
-            reward = terminalSteps[agent].reward
-            lastObservation = observationBuffer[behavior][agent]
-            lastAction = actionsBuffer[behavior][agent]
-            if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
-                memory[behavior].push(lastObservation, lastAction, reward, True, observation)
-                observationBuffer[behavior][agent] = None
-            rewards[behavior][agent] += reward
-            print(f"Final reward: {rewards[behavior][agent]}")
-            rewards[behavior][agent] = 0
+            behaviorActionsForThisStep = {}
+            specs = env.getSpecs(behavior)
+            nrOfContinuousActions = specs["ContinuousActions"]
+            nrOfDiscreteActions = len(specs["DiscreteActions"])
+            behaviorActionsForThisStep["continuous"] = np.zeros((len(decisionSteps), nrOfContinuousActions), dtype=np.float32)
+            behaviorActionsForThisStep["discrete"] = np.zeros((len(decisionSteps), nrOfDiscreteActions), dtype=np.int32)
 
-        
-        behaviorActionsForThisStep = {}
-        specs = env.getSpecs(behavior)
-        nrOfContinuousActions = specs["ContinuousActions"]
-        nrOfDiscreteActions = len(specs["DiscreteActions"])
-        behaviorActionsForThisStep["continuous"] = np.zeros((len(decisionSteps), nrOfContinuousActions), dtype=np.float32)
-        behaviorActionsForThisStep["discrete"] = np.zeros((len(decisionSteps), nrOfDiscreteActions), dtype=np.int32)
+            # Doing it together to maybe do a one batched pass one day
+            # Also need to stop the split for continuous and discrete. Model should spit out total action
+            for i, agent in enumerate(decisionSteps):
+                if nrOfContinuousActions > 0:
+                    continuousAction, _, _, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
+                    actionsBuffer[agent]['continuous'] = continuousAction
+                    behaviorActionsForThisStep['continuous'][i] = continuousAction
+                if nrOfDiscreteActions > 0:
+                    discreteAction, _, _, _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
+                    actionsBuffer[agent]['discrete'] = discreteAction
+                    behaviorActionsForThisStep['discrete'][i] = discreteAction
+                        
+                # obsShapes = []
+                # obsDimensionalites = []
+                # for element in observationsThatNeedAction[0]:
+                #     obsShapes.append(element.shape)
+                #     obsDimensionalites.append(len(element.shape))
+                # print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
 
-        # Doing it together to maybe do a one batched pass one day
-        # Also need to stop the split for continuous and discrete. Model should spit out total action
-        for i, agent in enumerate(decisionSteps):
-            if nrOfContinuousActions > 0:
-                continuousAction, _, _, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
-                actionsBuffer[behavior][agent]['continuous'] = continuousAction.detach().numpy()
-                behaviorActionsForThisStep['continuous'][i] = continuousAction.detach().numpy()
-            if nrOfDiscreteActions > 0:
-                discreteAction = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
-                actionsBuffer[behavior][agent]['discrete'] = discreteAction.detach().numpy()
-                behaviorActionsForThisStep['discrete'][i] = discreteAction.detach().numpy()
-                    
-            # obsShapes = []
-            # obsDimensionalites = []
-            # for element in observationsThatNeedAction[0]:
-            #     obsShapes.append(element.shape)
-            #     obsDimensionalites.append(len(element.shape))
-            # print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
-
-            print(f"Completed a whole step. Continuous actions: {behaviorActionsForThisStep['continuous']}, Discrete actions: {behaviorActionsForThisStep['discrete']}")
+            # print(f"Completed a whole step. Continuous actions: {behaviorActionsForThisStep['continuous']}, Discrete actions: {behaviorActionsForThisStep['discrete']}")
             env.setActions(behavior, behaviorActionsForThisStep['continuous'], behaviorActionsForThisStep['discrete'])
-    env.step()
+        env.step()
 env.close()
