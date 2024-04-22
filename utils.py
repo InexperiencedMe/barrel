@@ -66,7 +66,6 @@ class UnityInterface():
         assert len(terminalSteps) == 0, "Terminal step at the very beginning. Breaks initial obs buffer"
         for agentNr in decisionSteps:
             bufferList[agentNr] = decisionSteps[agentNr].obs
-        print(f"Returning initial observations with {sum(obs is None for obs in bufferList)} None elements")
         return bufferList
 
 def layerInit(layer, std=np.sqrt(2), bias_const=0.0):

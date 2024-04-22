@@ -20,7 +20,7 @@ for behavior in behaviorNames:
     observationBuffer[behavior] = env.getInitialObservations(behavior, observationBuffer)
     
 
-totalSteps = 1000
+totalSteps = 10
 for i in range(1, totalSteps+1):
     decisionSteps, terminalSteps = env.getSteps(behavior)
     for behavior in behaviorNames:
@@ -31,8 +31,9 @@ for i in range(1, totalSteps+1):
             observationsThatNeedAction.append(observation)
             reward = decisionSteps[agent].reward
             lastObservation = observationBuffer[behavior][agent]
+            # BUG KeyError: 17 for SoccerTwos. HOW TO HANDLE DIFFERENT TEAMS? Unity gives them IDs together
             lastAction = actionsBuffer[behavior][agent]
-            if lastObservation is not None and lastAction is not None:
+            if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
                 memory[behavior].push(lastObservation, lastAction, reward, False, observation)
                 observationBuffer[behavior][agent] = observation
             rewards[behavior][agent] += reward
@@ -42,7 +43,7 @@ for i in range(1, totalSteps+1):
             reward = terminalSteps[agent].reward
             lastObservation = observationBuffer[behavior][agent]
             lastAction = actionsBuffer[behavior][agent]
-            if lastObservation is not None and lastAction is not None:
+            if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
                 memory[behavior].push(lastObservation, lastAction, reward, True, observation)
                 observationBuffer[behavior][agent] = None
             rewards[behavior][agent] += reward
