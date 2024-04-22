@@ -52,8 +52,9 @@ for i in range(1, totalSteps+1):
                 if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
                     memory[behavior].push(lastObservation, lastAction, reward, True, observation)
                     observationBuffer[agent] = None
-                rewards[agent] += reward
-                print(f"Final reward: {rewards[agent]}")
+                    # Save rewards only if we made an action before, otherwise the initial state was terminated state
+                    rewards[agent] += reward
+                    print(f"Final reward: {rewards[agent]}")
                 rewards[agent] = 0
 
             
@@ -86,4 +87,7 @@ for i in range(1, totalSteps+1):
             # print(f"Completed a whole step. Continuous actions: {behaviorActionsForThisStep['continuous']}, Discrete actions: {behaviorActionsForThisStep['discrete']}")
             env.setActions(behavior, behaviorActionsForThisStep['continuous'], behaviorActionsForThisStep['discrete'])
         env.step()
+
+
+
 env.close()

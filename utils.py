@@ -53,12 +53,15 @@ class UnityInterface():
     def close(self):
         self.env.close()
 
-    def countAgents(self, behaviorName):
-        decisionSteps, terminalSteps = self.getSteps(behaviorName)
-        agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
-        print(f"For behavior {behaviorName} we have {agentsCount} agents in total")
-        # NOTE: Doesn't work for WallJump :( You have 2 policies for 1 agent there
-        # NOTE: I have no better way of predetermining agentCount for inactive agents
+    def countAgents(self, behaviorName=None):
+        if behaviorName is None:
+            agentsCount = 0
+            for behavior in self.behaviorNames:
+                decisionSteps, terminalSteps = self.getSteps(behaviorName)
+                agentsCount += len(set(decisionSteps).union(set(terminalSteps)))
+        else:
+            decisionSteps, terminalSteps = self.getSteps(behaviorName)
+            agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         return agentsCount
 
     def getInitialObservations(self, bufferList):
@@ -75,8 +78,7 @@ def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 class PPO(nn.Module):
-        # FIXME: Doesnt work when no visual input
-        # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
+    # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
     def __init__(self, envSpecs):
         super(PPO, self).__init__()
         self.envSpecs = envSpecs
