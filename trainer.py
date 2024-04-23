@@ -8,7 +8,7 @@ np.set_printoptions(linewidth=100, precision=2, suppress=True)
 env = UnityInterface(None)
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
-agents, memory, rewards, observationBuffer, actionsBuffer = {}, {}, {}, {}, {}
+agents, QNet, memory, rewards, observationBuffer, actionsBuffer = {}, {}, {}, {}, {}, {}
 
 totalAgentsCounts = 0
 for behavior in behaviorNames:
@@ -23,8 +23,17 @@ observationBuffer = env.getInitialObservations(observationBuffer)
 
 for behavior in behaviorNames:
     agents[behavior] = PPO(env.getSpecs(behavior))
+    QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
     memory[behavior] = Memory(5)
-    
+
+actorOptimizer = optim.Adam(list(actor.parameters()), lr=policy_lr)
+
+targetEntropy = -targetEntropyScale * torch.log(1 / torch.tensor(envs.single_action_space.n))
+logAlpha = torch.zeros(1, requires_grad=True, device=device)
+alpha = logAlpha.exp().item()
+alphaOptimizer = optim.Adam([logAlpha], lr=q_lr)
+
+
 
 totalSteps = 100
 for i in range(1, totalSteps+1):
@@ -60,7 +69,7 @@ for i in range(1, totalSteps+1):
             
             behaviorActionsForThisStep = {}
             specs = env.getSpecs(behavior)
-            nrOfContinuousActions = specs["ContinuousActions"]
+            nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
             nrOfDiscreteActions = len(specs["DiscreteActions"])
             behaviorActionsForThisStep["continuous"] = np.zeros((len(decisionSteps), nrOfContinuousActions), dtype=np.float32)
             behaviorActionsForThisStep["discrete"] = np.zeros((len(decisionSteps), nrOfDiscreteActions), dtype=np.int32)
@@ -69,14 +78,15 @@ for i in range(1, totalSteps+1):
             # Also need to stop the split for continuous and discrete. Model should spit out total action
             for i, agent in enumerate(decisionSteps):
                 if nrOfContinuousActions > 0:
-                    continuousAction, _, _, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
+                    continuousAction, logProbsC, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
                     actionsBuffer[agent]['continuous'] = continuousAction
                     behaviorActionsForThisStep['continuous'][i] = continuousAction
+                    print(f"logProbsC: {logProbsC}")
                 if nrOfDiscreteActions > 0:
-                    discreteAction, _, _, _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
+                    discreteAction, logProbsD, _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
                     actionsBuffer[agent]['discrete'] = discreteAction
                     behaviorActionsForThisStep['discrete'][i] = discreteAction
-                        
+                    print(f"logProbsD: {logProbsD}")
                 # obsShapes = []
                 # obsDimensionalites = []
                 # for element in observationsThatNeedAction[0]:
