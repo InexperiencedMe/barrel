@@ -24,14 +24,14 @@ observationBuffer = env.getInitialObservations(observationBuffer)
 for behavior in behaviorNames:
     agents[behavior] = PPO(env.getSpecs(behavior))
     QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
-    memory[behavior] = Memory(5)
+    memory[behavior] = Memory(10)
 
-actorOptimizer = optim.Adam(list(actor.parameters()), lr=policy_lr)
+# actorOptimizer = optim.Adam(list(actor.parameters()), lr=policy_lr)
 
-targetEntropy = -targetEntropyScale * torch.log(1 / torch.tensor(envs.single_action_space.n))
-logAlpha = torch.zeros(1, requires_grad=True, device=device)
-alpha = logAlpha.exp().item()
-alphaOptimizer = optim.Adam([logAlpha], lr=q_lr)
+# targetEntropy = -targetEntropyScale * torch.log(1 / torch.tensor(envs.single_action_space.n))
+# logAlpha = torch.zeros(1, requires_grad=True, device=device)
+# alpha = logAlpha.exp().item()
+# alphaOptimizer = optim.Adam([logAlpha], lr=q_lr)
 
 
 
@@ -48,7 +48,7 @@ for i in range(1, totalSteps+1):
                 reward = decisionSteps[agent].reward
                 lastObservation = observationBuffer[agent]
                 lastAction = actionsBuffer[agent]
-                if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
+                if lastObservation != None and (lastAction["continuous"] != None or lastAction["discrete"] != None):
                     memory[behavior].push(lastObservation, lastAction, reward, False, observation)
                     observationBuffer[agent] = observation
                 rewards[agent] += reward
@@ -58,7 +58,7 @@ for i in range(1, totalSteps+1):
                 reward = terminalSteps[agent].reward
                 lastObservation = observationBuffer[agent]
                 lastAction = actionsBuffer[agent]
-                if lastObservation != None and lastAction["discrete"] != None and lastAction["discrete"] != None:
+                if lastObservation != None and (lastAction["continuous"] != None or lastAction["discrete"] != None):
                     memory[behavior].push(lastObservation, lastAction, reward, True, observation)
                     observationBuffer[agent] = None
                     # Save rewards only if we made an action before, otherwise the initial state was terminated state
@@ -81,12 +81,12 @@ for i in range(1, totalSteps+1):
                     continuousAction, logProbsC, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
                     actionsBuffer[agent]['continuous'] = continuousAction
                     behaviorActionsForThisStep['continuous'][i] = continuousAction
-                    print(f"logProbsC: {logProbsC}")
+                    # print(f"logProbsC: {logProbsC}")
                 if nrOfDiscreteActions > 0:
                     discreteAction, logProbsD, _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
                     actionsBuffer[agent]['discrete'] = discreteAction
                     behaviorActionsForThisStep['discrete'][i] = discreteAction
-                    print(f"logProbsD: {logProbsD}")
+                    # print(f"logProbsD: {logProbsD}")
                 # obsShapes = []
                 # obsDimensionalites = []
                 # for element in observationsThatNeedAction[0]:
@@ -98,6 +98,13 @@ for i in range(1, totalSteps+1):
             env.setActions(behavior, behaviorActionsForThisStep['continuous'], behaviorActionsForThisStep['discrete'])
         env.step()
 
-
-
+        print(f"memory length for behavior {behavior}: {len(memory[behavior])}")
+        if len(memory[behavior]) > 2:
+            batchSize = min(len(memory[behavior]), 64)
+            print(f"Batch size: {batchSize}")
+            sampledExperiences = memory[behavior].sample(min(len(memory[behavior]), 64))
+            # print(f"Sampled experiences: {sampledExperiences}")
+            with torch.no_grad():
+                nextContinuousStateActions = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
+                print(f"nextContinuousStateActions: {nextContinuousStateActions}")
 env.close()

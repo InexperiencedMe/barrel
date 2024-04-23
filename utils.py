@@ -69,7 +69,6 @@ class UnityInterface():
             decisionSteps, _ = self.env.get_steps(behavior)
             for agentNr in decisionSteps:
                 bufferList[agentNr] = decisionSteps[agentNr].obs
-        print(f"Returning initial observations with {sum(obs is None for obs in bufferList)} None elements")
         return bufferList
 
 def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
@@ -112,8 +111,6 @@ def processObservations(x):
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
         super(QNetwork, self).__init__()
-        self.using1Dobs = self.obsSize1D > 0
-        self.using3Dobs = sum(self.obsSize3D) > 0
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
         self.obsChannels3D = self.obsSize3D[0] # first shape dim is channels
@@ -154,8 +151,8 @@ class SoftQNetwork():
     def __init__(self, envSpecs):
         self.QNet1 = QNetwork(envSpecs)
         self.QNet2 = QNetwork(envSpecs)
-        self.QNet1Target = QNetwork
-        self.QNet2Target = QNetwork
+        self.QNet1Target = QNetwork(envSpecs)
+        self.QNet2Target = QNetwork(envSpecs)
         self.QNet1Target.load_state_dict(self.QNet1.state_dict())
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
@@ -256,7 +253,7 @@ class PPO(nn.Module):
         return torch.cat(netsOutputs)
     
 class Memory(object):
-    def __init__(self, capacity, fieldNames="observations, actions, rewards, dones, nextObservations"):
+    def __init__(self, capacity, fieldNames=["observations", "actions", "rewards", "dones", "nextObservations"]):
         self.fieldNames = namedtuple("fieldNames", fieldNames)
         self.memory = deque(maxlen=capacity)
 
