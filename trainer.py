@@ -26,13 +26,11 @@ for behavior in behaviorNames:
     QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
     memory[behavior] = Memory(10)
 
-# actorOptimizer = optim.Adam(list(actor.parameters()), lr=policy_lr)
-
+alphaContinuous, alphaDiscrete = 0.2, 0.2
 # targetEntropy = -targetEntropyScale * torch.log(1 / torch.tensor(envs.single_action_space.n))
 # logAlpha = torch.zeros(1, requires_grad=True, device=device)
 # alpha = logAlpha.exp().item()
 # alphaOptimizer = optim.Adam([logAlpha], lr=q_lr)
-
 
 
 totalSteps = 100
@@ -98,13 +96,87 @@ for i in range(1, totalSteps+1):
             env.setActions(behavior, behaviorActionsForThisStep['continuous'], behaviorActionsForThisStep['discrete'])
         env.step()
 
+
+
         print(f"memory length for behavior {behavior}: {len(memory[behavior])}")
         if len(memory[behavior]) > 2:
             batchSize = min(len(memory[behavior]), 64)
             print(f"Batch size: {batchSize}")
             sampledExperiences = memory[behavior].sample(min(len(memory[behavior]), 64))
             # print(f"Sampled experiences: {sampledExperiences}")
+            # Critic update
             with torch.no_grad():
-                nextContinuousStateActions = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
-                print(f"nextContinuousStateActions: {nextContinuousStateActions}")
+                if agents[behavior].usingContinuousActions and agents[behavior].usingDiscreteActions:
+                    nextStateActionsContinuous, nextStateLogprobsContinuous, _ = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
+                    nextStateActionsDiscrete, nextStateLogprobsDiscrete, nextStateProbsDiscrete, _ = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
+                    QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.nextObservations, nextStateActionsContinuous)
+                    QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.nextObservations, nextStateActionsContinuous)
+                    minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaContinuous * nextStateLogprobsContinuous - alphaDiscrete * nextStateLogprobsDiscrete)
+                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * 0.99 * (minQNextTarget.sum(1)).view(-1)
+                
+                elif agents[behavior].usingContinuousActions:
+                    nextStateActionsContinuous, nextStateLogProbs, _ = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
+                    QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.next_observations, nextStateActionsContinuous)
+                    QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.next_observations, nextStateActionsContinuous)
+                    minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaContinuous * nextStateLogProbs
+                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * 0.99 * (minQNextTarget).view(-1)
+                
+                elif agents[behavior].usingDiscreteActions:
+                    _, nextStateLogProbs, nextStateActionprobs = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
+                    QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.next_observations)
+                    QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.next_observations)
+                    minQNextTarget = nextStateActionprobs * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaDiscrete * nextStateLogProbs)
+                    minQNextTarget = minQNextTarget.sum(dim=1)
+                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * 0.99 * (minQNextTarget)
+            
+            QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations, sampledExperiences.actions['continuous']).gather(1, sampledExperiences.actions['discrete'].long().view(-1, 1)).squeeze().view(-1)
+            QFunction2ActionValues = QNet[behavior].QNet2(sampledExperiences.observations, sampledExperiences.actions['continuous']).gather(1, sampledExperiences.actions['discrete'].long().view(-1, 1)).squeeze().view(-1)
+            QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
+            QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
+            QFunctionsTotalLoss = QFunction1Loss + QFunction2Loss
+            
+            QNet[behavior].QNetsOptimizer.zero_grad()
+            QFunctionsTotalLoss.backward()
+            QNet[behavior].QNetsOptimizer.step()
+
+
+
+            # Actor update
+            nextStateActionsContinuous, nextStateLogprobsContinuous, _ = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
+            nextStateActionsDiscrete, nextStateLogprobsDiscrete, nextStateProbsDiscrete, _ = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
+            QFunction1Evaluation = QNet[behavior].QNet1(sampledExperiences.nextObservations, nextStateActionsContinuous)
+            QFunction2Evaluation = QNet[behavior].QNet2(sampledExperiences.nextObservations, nextStateActionsContinuous)
+
+            minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
+
+            policyLossContinuous = ((alphaContinuous * nextStateLogprobsContinuous - minQEvaluation)).sum(1).mean()
+            policyLossDiscrete = (nextStateProbsDiscrete * (alphaDiscrete * nextStateLogprobsDiscrete - minQEvaluation)).sum(1).mean()
+            policyLoss = policyLossContinuous + policyLossDiscrete
+
+            agents[behavior].policyOptimizer.zero_grad()
+            policyLoss.backward()
+            agents[behavior].policyOptimizer.step()
+            
+            # TODO: Auto entropy
+            # with torch.no_grad():
+            #     a_c, a_d, lpi_c, lpi_d, p_d = pg.get_action(s_obs, device)
+            # alpha_loss = (-log_alpha * p_d * (p_d * lpi_c + target_entropy)).sum(1).mean()
+            # alpha_d_loss = (-log_alpha_d * p_d * (lpi_d + target_entropy_d)).sum(1).mean()
+
+            # a_optimizer.zero_grad()
+            # alpha_loss.backward()
+            # a_optimizer.step()
+            # alpha = log_alpha.exp().detach().cpu().item()
+
+            # a_d_optimizer.zero_grad()
+            # alpha_d_loss.backward()
+            # a_d_optimizer.step()
+            # alpha_d = log_alpha_d.exp().detach().cpu().item()
+
+            # update the target network
+            if i % 2 == 0:
+                for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1_target.parameters()):
+                    targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
+                for param, targetParam in zip(QNet[behavior].QNet2.parameters(), QNet[behavior].QNet2_target.parameters()):
+                    targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
 env.close()

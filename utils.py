@@ -157,7 +157,7 @@ class SoftQNetwork():
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
         self.QNetsOptimizer = optim.Adam(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
-        
+        self.tau = 0.005
 
 class PPO(nn.Module):
     # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
@@ -206,6 +206,8 @@ class PPO(nn.Module):
             layerInit(nn.Linear(64, discreteActionSize), std=0.01))    
             self.actorDiscrete.append(neuralBranch)
         
+        self.actorOptimizer = optim.Adam(list(self.parameters()), lr=3e-4)
+
     # TODO: Should combine the 2 action types and return empty action if not needed
     def getDiscreteActionAndValue(self, x, action=None):
         obs1D, obs3D = processObservations(x)
