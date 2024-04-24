@@ -27,6 +27,7 @@ for behavior in behaviorNames:
     memory[behavior] = Memory(10)
 
 alphaContinuous, alphaDiscrete = 0.2, 0.2
+gamma = 0.99
 # targetEntropy = -targetEntropyScale * torch.log(1 / torch.tensor(envs.single_action_space.n))
 # logAlpha = torch.zeros(1, requires_grad=True, device=device)
 # alpha = logAlpha.exp().item()
@@ -74,17 +75,25 @@ for i in range(1, totalSteps+1):
 
             # Doing it together to maybe do a one batched pass one day
             # Also need to stop the split for continuous and discrete. Model should spit out total action
+            ######################################################################################################################
+            ######################################################################################################################
+            ######################################################################################################################
+            # NOTE: FOR THE LOVE OF GOD YOU HAVE TO MAKE IT A BATCHED PASS, OTHERWISE EVERYTHING BREAKS
+            ######################################################################################################################
+            ######################################################################################################################
+            ######################################################################################################################
+
             for i, agent in enumerate(decisionSteps):
                 if nrOfContinuousActions > 0:
-                    continuousAction, logProbsC, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
+                    continuousAction, _, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
                     actionsBuffer[agent]['continuous'] = continuousAction
                     behaviorActionsForThisStep['continuous'][i] = continuousAction
-                    # print(f"logProbsC: {logProbsC}")
+                
                 if nrOfDiscreteActions > 0:
-                    discreteAction, logProbsD, _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
+                    discreteAction, _, _, _= agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
                     actionsBuffer[agent]['discrete'] = discreteAction
                     behaviorActionsForThisStep['discrete'][i] = discreteAction
-                    # print(f"logProbsD: {logProbsD}")
+                    
                 # obsShapes = []
                 # obsDimensionalites = []
                 # for element in observationsThatNeedAction[0]:
@@ -112,22 +121,22 @@ for i in range(1, totalSteps+1):
                     QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.nextObservations, nextStateActionsContinuous)
                     QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.nextObservations, nextStateActionsContinuous)
                     minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaContinuous * nextStateLogprobsContinuous - alphaDiscrete * nextStateLogprobsDiscrete)
-                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * 0.99 * (minQNextTarget.sum(1)).view(-1)
+                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * gamma * (minQNextTarget.sum(1)).view(-1)
                 
                 elif agents[behavior].usingContinuousActions:
                     nextStateActionsContinuous, nextStateLogProbs, _ = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
                     QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.next_observations, nextStateActionsContinuous)
                     QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.next_observations, nextStateActionsContinuous)
                     minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaContinuous * nextStateLogProbs
-                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * 0.99 * (minQNextTarget).view(-1)
+                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * gamma * (minQNextTarget).view(-1)
                 
                 elif agents[behavior].usingDiscreteActions:
-                    _, nextStateLogProbs, nextStateActionprobs = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
+                    _, nextStateLogProbs, nextStateActionProbs, _ = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
                     QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.next_observations)
                     QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.next_observations)
-                    minQNextTarget = nextStateActionprobs * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaDiscrete * nextStateLogProbs)
+                    minQNextTarget = nextStateActionProbs * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaDiscrete * nextStateLogProbs)
                     minQNextTarget = minQNextTarget.sum(dim=1)
-                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * 0.99 * (minQNextTarget)
+                    nextQValue = sampledExperiences.rewards.flatten() + (1 - sampledExperiences.dones.flatten()) * gamma * (minQNextTarget)
             
             QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations, sampledExperiences.actions['continuous']).gather(1, sampledExperiences.actions['discrete'].long().view(-1, 1)).squeeze().view(-1)
             QFunction2ActionValues = QNet[behavior].QNet2(sampledExperiences.observations, sampledExperiences.actions['continuous']).gather(1, sampledExperiences.actions['discrete'].long().view(-1, 1)).squeeze().view(-1)

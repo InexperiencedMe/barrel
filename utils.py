@@ -94,19 +94,50 @@ def getObsSizes(specs):
 
 def processObservations(x):
         # TODO Getting a warning with this approach.. Could rework
-        obs1D = torch.empty((0,))
-        obs3D = torch.empty((0,))
-        for observation in x:
-            observation = torch.tensor(observation)
-            if len(observation.shape) == 1:
-                obs1D = torch.cat((obs1D, observation))
-            elif len(observation.shape) == 3:
-                obs3D = torch.cat((obs3D, observation))
-            else:
-                print(f"Unexpected {len(observation.shape)}-dimensional observation")
-        # TODO: Put it on device?
-        # print(f"processObservations returning obs1D of shape {obs1D.shape} abd obs3D of shape {obs3D.shape}")
-        return obs1D, obs3D
+        if type(x[0]) == np.ndarray: # Single pass
+            obs1D = torch.empty((0,))
+            obs3D = torch.empty((0,))
+            for observationElement in x:
+                observationElement = torch.from_numpy(observationElement)
+                print(f"Observation of shape: {list(observationElement.shape)}")
+                if len(list(observationElement.shape)) == 1:
+                    print(f"SINGLE So, dimensionality is 1 and we add it to obs1D of shape: {list(obs1D.shape)}")
+                    obs1D = torch.cat((obs1D, observationElement))
+                    print(f"Making it of shape: {list(obs1D.shape)}")
+                elif len(list(observationElement.shape)) == 3:
+                    print(f"SINGLE So, dimensionality is 1 and we add it to obs1D of shape: {list(obs3D.shape)}")
+                    obs3D = torch.cat((obs3D, observationElement))
+                    print(f"Making it of shape: {list(obs3D.shape)}")
+                else:
+                    print(f"Unexpected {len(list(observationElement.shape))}-dimensional observation")
+            # TODO: Put it on device?
+            print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
+            return obs1D, obs3D
+        else: # Batched pass
+            allObs1D, allObs3D = [], []
+            for observation in x:
+                obs1D = torch.zeros((0,))
+                obs3D = torch.zeros((0,))
+                for observationElement in observation:
+                    observationElement = torch.from_numpy(observationElement)
+                    print(f"Observation of shape: {list(observationElement.shape)}")
+                    if len(list(observationElement.shape)) == 1:
+                        print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs1D.shape)}")
+                        obs1D = torch.cat((obs1D, observationElement))
+                        print(f"Making it of shape: {list(obs1D.shape)}")
+                    elif len(list(observationElement.shape)) == 3:
+                        print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs3D.shape)}")
+                        obs3D = torch.cat((obs3D, observationElement))
+                        print(f"Making it of shape: {list(obs3D.shape)}")
+                    else:
+                        print(f"Unexpected {len(list(observationElement.shape))}-dimensional observation")
+                allObs1D.append(obs1D.clone())
+                allObs3D.append(obs3D.clone())
+            # TODO: Put it on device?
+            # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
+            print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
+            print(f"Outputting stacked allObs1D and allObs3D of shapes: {torch.stack(allObs1D).shape}, {torch.stack(allObs3D).shape}")
+            return torch.stack(allObs1D), torch.stack(allObs3D)
 
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
@@ -130,7 +161,7 @@ class QNetwork(nn.Module):
             self.preCritic3D = nn.Sequential(
                 layerInit(nn.Conv2d(self.obsChannels3D, 32, 8, stride=4)), nn.Tanh(),
                 layerInit(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
-                layerInit(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten(start_dim=0)) # defaults to 1, we will maintain batch dim with time
+                layerInit(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
         self.criticFinal = nn.Sequential(layerInit(nn.Linear(64 + self.preCritic3DoutputSize, 1), std=0.01))        
@@ -185,7 +216,7 @@ class PPO(nn.Module):
             self.preActor3D = nn.Sequential(
                 layerInit(nn.Conv2d(self.obsChannels3D, 32, 8, stride=4)), nn.Tanh(),
                 layerInit(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
-                layerInit(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten(start_dim=0))
+                layerInit(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
 
@@ -227,7 +258,7 @@ class PPO(nn.Module):
                 logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
                 entropies.append(probabilities.entropy())
         # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
-        return actionTemp, torch.tensor(logProbs).sum(-1), torch.tensor(entropies).sum(-1)
+        return actionTemp, torch.tensor(logProbs).sum(-1), torch.tensor(probabilities.probs), torch.tensor(entropies).sum(-1)
     
     def getContinuousActionAndValue(self, x, action=None, evaluation=False):
         obs1D, obs3D = processObservations(x)
@@ -246,12 +277,16 @@ class PPO(nn.Module):
         return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1)
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
+        print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
         netsOutputs = []
         if self.using1Dobs:
-            # print(f"Trying to feed preActor1D an input of shape {obs1D.shape} while obsSize1D is {self.obsSize1D}")
+            # print(f"Trying to feed preActor1D an input of shape {list(obs1D.shape)} while obsSize1D is {self.obsSize1D}")
             netsOutputs.append(self.preActor1D(obs1D))
+            print(f"Appending to outputs preActor1D outputs of shape {self.preActor1D(obs1D).shape}")
         if self.using3Dobs:
             netsOutputs.append(self.preActor3D(obs3D))
+            print(f"Appending to outputs preActor3D outputs of shape {self.preActor3D(obs3D).shape}")
+        print(f"netsOutputs that we'll try to concatenate: {netsOutputs}")
         return torch.cat(netsOutputs)
     
 class Memory(object):
