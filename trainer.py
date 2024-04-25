@@ -73,26 +73,18 @@ for i in range(1, totalSteps+1):
             behaviorActionsForThisStep["continuous"] = np.zeros((len(decisionSteps), nrOfContinuousActions), dtype=np.float32)
             behaviorActionsForThisStep["discrete"] = np.zeros((len(decisionSteps), nrOfDiscreteActions), dtype=np.int32)
 
-            # Doing it together to maybe do a one batched pass one day
-            # Also need to stop the split for continuous and discrete. Model should spit out total action
-            ######################################################################################################################
-            ######################################################################################################################
-            ######################################################################################################################
-            # NOTE: FOR THE LOVE OF GOD YOU HAVE TO MAKE IT A BATCHED PASS, OTHERWISE EVERYTHING BREAKS
-            ######################################################################################################################
-            ######################################################################################################################
-            ######################################################################################################################
+            # Batched pass to get actions
+            behaviorActionsForThisStep['continuous'], _, _, = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction)
+            behaviorActionsForThisStep['discrete'], _, _, _, = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction)
 
+            # TODO: break here. Examine the outputs to see if they are what we expect them to be
+
+            # Transcribe the actions to buffer
             for i, agent in enumerate(decisionSteps):
                 if nrOfContinuousActions > 0:
-                    continuousAction, _, _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction[i])
-                    actionsBuffer[agent]['continuous'] = continuousAction
-                    behaviorActionsForThisStep['continuous'][i] = continuousAction
-                
+                    actionsBuffer[agent]['continuous'] =  behaviorActionsForThisStep['continuous'][i]
                 if nrOfDiscreteActions > 0:
-                    discreteAction, _, _, _= agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction[i])
-                    actionsBuffer[agent]['discrete'] = discreteAction
-                    behaviorActionsForThisStep['discrete'][i] = discreteAction
+                    actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][i]
                     
                 # obsShapes = []
                 # obsDimensionalites = []

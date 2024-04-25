@@ -135,7 +135,7 @@ def processObservations(x):
                 allObs3D.append(obs3D.clone())
             # TODO: Put it on device?
             # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
-            print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
+            # print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
             print(f"Outputting stacked allObs1D and allObs3D of shapes: {torch.stack(allObs1D).shape}, {torch.stack(allObs3D).shape}")
             return torch.stack(allObs1D), torch.stack(allObs3D)
 
@@ -159,9 +159,9 @@ class QNetwork(nn.Module):
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
-                layerInit(nn.Conv2d(self.obsChannels3D, 32, 8, stride=4)), nn.Tanh(),
-                layerInit(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
-                layerInit(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
+                layerInit(nn.Conv2d(self.obsChannels3D, 16, 7, stride=4)), nn.Tanh(),
+                layerInit(nn.Conv2d(16, 32, 5, stride=2)), nn.Tanh(),
+                layerInit(nn.Conv2d(32, 32, 3, stride=1)), nn.Tanh(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
         self.criticFinal = nn.Sequential(layerInit(nn.Linear(64 + self.preCritic3DoutputSize, 1), std=0.01))        
@@ -214,9 +214,9 @@ class PPO(nn.Module):
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
-                layerInit(nn.Conv2d(self.obsChannels3D, 32, 8, stride=4)), nn.Tanh(),
-                layerInit(nn.Conv2d(32, 64, 4, stride=2)), nn.Tanh(),
-                layerInit(nn.Conv2d(64, 64, 3, stride=1)), nn.Tanh(), nn.Flatten())
+                layerInit(nn.Conv2d(self.obsChannels3D, 16, 7, stride=4)), nn.Tanh(),
+                layerInit(nn.Conv2d(16, 32, 5, stride=2)), nn.Tanh(),
+                layerInit(nn.Conv2d(32, 32, 3, stride=1)), nn.Tanh(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
 
@@ -258,7 +258,7 @@ class PPO(nn.Module):
                 logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
                 entropies.append(probabilities.entropy())
         # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
-        return actionTemp, torch.tensor(logProbs).sum(-1), torch.tensor(probabilities.probs), torch.tensor(entropies).sum(-1)
+        return actionTemp, torch.stack(logProbs).sum(-1), torch.tensor(probabilities.probs), torch.stack(entropies).sum(-1)
     
     def getContinuousActionAndValue(self, x, action=None, evaluation=False):
         obs1D, obs3D = processObservations(x)
@@ -286,8 +286,8 @@ class PPO(nn.Module):
         if self.using3Dobs:
             netsOutputs.append(self.preActor3D(obs3D))
             print(f"Appending to outputs preActor3D outputs of shape {self.preActor3D(obs3D).shape}")
-        print(f"netsOutputs that we'll try to concatenate: {netsOutputs}")
-        return torch.cat(netsOutputs)
+        print(f"Trying to cat obs1D and obs3D of shapes: {netsOutputs[0].shape}, {netsOutputs[1].shape}")
+        return torch.cat(netsOutputs, -1)
     
 class Memory(object):
     def __init__(self, capacity, fieldNames=["observations", "actions", "rewards", "dones", "nextObservations"]):
