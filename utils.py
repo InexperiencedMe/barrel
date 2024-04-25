@@ -126,7 +126,7 @@ def processObservations(x):
                         obs1D = torch.cat((obs1D, observationElement))
                         print(f"Making it of shape: {list(obs1D.shape)}")
                     elif len(list(observationElement.shape)) == 3:
-                        print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs3D.shape)}")
+                        print(f"BATCHED So, dimensionality is 3 and we add it to obs1D of shape: {list(obs3D.shape)}")
                         obs3D = torch.cat((obs3D, observationElement))
                         print(f"Making it of shape: {list(obs3D.shape)}")
                     else:
@@ -230,35 +230,47 @@ class PPO(nn.Module):
                 layerInit(nn.Linear(64, self.continuousActionSize), std=0.01))        
             self.actorLogStd = nn.Parameter(torch.zeros(self.continuousActionSize))
 
-        self.actorDiscrete = []
-        for discreteActionSize in self.envSpecs["DiscreteActions"]:
-            neuralBranch = nn.Sequential(
-            layerInit(nn.Linear(64 + self.preActor3DoutputSize, 64)), nn.Tanh(),
-            layerInit(nn.Linear(64, discreteActionSize), std=0.01))    
-            self.actorDiscrete.append(neuralBranch)
+        if self.usingDiscreteActions:
+            self.actorDiscrete = nn.Sequential(
+                layerInit(nn.Linear(64 + self.preActor3DoutputSize, 64)), nn.Tanh(),
+                layerInit(nn.Linear(64, sum(self.envSpecs["DiscreteActions"])), std=0.01))
+            print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
         self.actorOptimizer = optim.Adam(list(self.parameters()), lr=3e-4)
 
+    # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
+    # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
     def getDiscreteActionAndValue(self, x, action=None):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+        logits = self.actorDiscrete(observationFeatures)
+        split_logits = torch.split(logits, list(self.envSpecs["DiscreteActions"]), dim=-1)
+        multi_categoricals = [Categorical(logits=logits) for logits in split_logits]
         if action is None:
-            actionTemp = []
-        else:
-            actionTemp = action
-        logProbs = []
-        entropies = []
-        # TODO: not handling action masks yet
-        for discreteAction in range(len(self.envSpecs["DiscreteActions"])):
-            logits = self.actorDiscrete[discreteAction](observationFeatures)
-            probabilities = Categorical(logits=logits)
-            if action is None:
-                actionTemp.append(probabilities.sample())
-                logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
-                entropies.append(probabilities.entropy())
-        # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
-        return actionTemp, torch.stack(logProbs).sum(-1), torch.tensor(probabilities.probs), torch.stack(entropies).sum(-1)
+            action = torch.stack([categorical.sample() for categorical in multi_categoricals])
+        logprobs = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)])
+        probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
+        entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
+        return action.T, logprobs.sum(0), probs.sum(0), entropies.sum(0)
+
+
+        # if action is None:
+        #     actionTemp = []
+        # else:
+        #     actionTemp = action
+        # logProbs = []
+        # entropies = []
+        # # TODO: not handling action masks yet
+        # # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
+        # for discreteAction in range(len(self.envSpecs["DiscreteActions"])):
+        #     logits = self.actorDiscrete[discreteAction](observationFeatures)
+        #     probabilities = Categorical(logits=logits)
+        #     if action is None:
+        #         actionTemp.append(probabilities.sample())
+        #         logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
+        #         entropies.append(probabilities.entropy())
+        # return actionTemp, torch.stack(logProbs).sum(-1), torch.tensor(probabilities.probs), torch.stack(entropies).sum(-1)
     
     def getContinuousActionAndValue(self, x, action=None, evaluation=False):
         obs1D, obs3D = processObservations(x)
@@ -286,7 +298,6 @@ class PPO(nn.Module):
         if self.using3Dobs:
             netsOutputs.append(self.preActor3D(obs3D))
             print(f"Appending to outputs preActor3D outputs of shape {self.preActor3D(obs3D).shape}")
-        print(f"Trying to cat obs1D and obs3D of shapes: {netsOutputs[0].shape}, {netsOutputs[1].shape}")
         return torch.cat(netsOutputs, -1)
     
 class Memory(object):
