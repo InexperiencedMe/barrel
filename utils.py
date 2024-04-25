@@ -253,24 +253,6 @@ class PPO(nn.Module):
         probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
         entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
         return action.T, logprobs.sum(0), probs.sum(0), entropies.sum(0)
-
-
-        # if action is None:
-        #     actionTemp = []
-        # else:
-        #     actionTemp = action
-        # logProbs = []
-        # entropies = []
-        # # TODO: not handling action masks yet
-        # # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
-        # for discreteAction in range(len(self.envSpecs["DiscreteActions"])):
-        #     logits = self.actorDiscrete[discreteAction](observationFeatures)
-        #     probabilities = Categorical(logits=logits)
-        #     if action is None:
-        #         actionTemp.append(probabilities.sample())
-        #         logProbs.append(probabilities.log_prob(actionTemp[discreteAction]))
-        #         entropies.append(probabilities.entropy())
-        # return actionTemp, torch.stack(logProbs).sum(-1), torch.tensor(probabilities.probs), torch.stack(entropies).sum(-1)
     
     def getContinuousActionAndValue(self, x, action=None, evaluation=False):
         obs1D, obs3D = processObservations(x)
