@@ -77,7 +77,7 @@ def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 def calculateConvNetOutputSize(net, inputSize):
-    return torch.numel(torch.flatten(net(torch.ones(inputSize))))
+    return torch.numel(net(torch.ones(inputSize)))
 
 def getObsSizes(specs):
     obsSize1D = 0
@@ -127,16 +127,19 @@ class QNetwork(nn.Module):
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
         self.obsChannels3D = self.obsSize3D[0] # first shape dim is channels
         self.continuousActionSize = self.envSpecs["ContinuousActions"]
+        self.preCritic1DoutputSize = 0
         self.preCritic3DoutputSize = 0
-        self.preActor3DoutputSize = 0
         self.using1Dobs = self.obsSize1D > 0
         self.using3Dobs = sum(self.obsSize3D) > 0
+        self.usingDiscreteActions = len(self.envSpecs["DiscreteActions"]) > 0
+        self.usingContinuousActions = self.continuousActionSize > 0
 
         if self.using1Dobs:
             self.preCritic1D = nn.Sequential(
                 layerInit(nn.Linear(self.obsSize1D, 256)), nn.Tanh(),
                 layerInit(nn.Linear(256, 128)), nn.Tanh(),
                 layerInit(nn.Linear(128, 64)), nn.Tanh())
+            self.preCritic1DoutputSize = 64
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
@@ -145,11 +148,14 @@ class QNetwork(nn.Module):
                 layerInit(nn.Conv2d(32, 32, 3, stride=1)), nn.Tanh(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(layerInit(nn.Linear(64 + self.preCritic3DoutputSize, 1), std=0.01))        
+        self.criticFinal = nn.Sequential(layerInit(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 64), std=0.01), nn.Tanh(),
+                                                 layerInit(nn.Linear(64, 1)), nn.Tanh(), nn.Flatten())
     
-    def forward(self, x):
+    def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
-        return self.criticFinal(self.getObservationFeaturesForCritic(obs1D, obs3D))
+        standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
+        actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
+        return self.criticFinal(torch.cat(standardObsFeatures, actionObsFeatures))
 
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         netsOutputs = []
@@ -158,6 +164,25 @@ class QNetwork(nn.Module):
         if self.using3Dobs:
             netsOutputs.append(self.preCritic3D(obs3D))
         return torch.cat(netsOutputs)
+
+    def getTotalActionSize(self):
+        return self.continuousActionSize + sum(self.envSpecs["DiscreteActions"])
+    
+    def getActionRepresentationForInput(self, actionsContinuous=None, actionsDiscrete=None):
+        featuresList = []
+        if actionsContinuous != None:
+            featuresC = torch.tensor(actionsContinuous)
+            featuresList.append(featuresC)
+
+        if actionsDiscrete != None:
+            onehots = []
+            for i, discreteSize in enumerate(self.envSpecs["DiscreteActions"]):
+                onehots.append(F.one_hot(actionsDiscrete[:, i], discreteSize))
+            featuresList.append(torch.cat(onehots, -1))
+    
+        features = torch.cat(featuresList, -1)
+        print(f"Final input respresentation (first 3):\n{features[:3]}")
+
 
 class SoftQNetwork():
     def __init__(self, envSpecs):
@@ -180,7 +205,7 @@ class PPO(nn.Module):
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
         self.obsChannels3D = self.obsSize3D[0] # first shape dim is channels
         self.continuousActionSize = self.envSpecs["ContinuousActions"]
-        self.preCritic3DoutputSize = 0
+        self.preActor1DoutputSize = 0
         self.preActor3DoutputSize = 0
         self.using1Dobs = self.obsSize1D > 0
         self.using3Dobs = sum(self.obsSize3D) > 0
@@ -192,6 +217,7 @@ class PPO(nn.Module):
                 layerInit(nn.Linear(self.obsSize1D, 256)), nn.Tanh(),
                 layerInit(nn.Linear(256, 128)), nn.Tanh(),
                 layerInit(nn.Linear(128, 64)), nn.Tanh())
+            self.preActor1DoutputSize = 64
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
@@ -207,15 +233,15 @@ class PPO(nn.Module):
 
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
-                layerInit(nn.Linear(64 + self.preActor3DoutputSize, 64)), nn.Tanh(),
+                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 64)), nn.Tanh(),
                 layerInit(nn.Linear(64, self.continuousActionSize), std=0.01))        
             self.actorLogStd = nn.Parameter(torch.zeros(self.continuousActionSize))
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
-                layerInit(nn.Linear(64 + self.preActor3DoutputSize, 64)), nn.Tanh(),
+                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 64)), nn.Tanh(),
                 layerInit(nn.Linear(64, sum(self.envSpecs["DiscreteActions"])), std=0.01))
-            print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
+            # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
         self.actorOptimizer = optim.Adam(list(self.parameters()), lr=3e-4)
 
@@ -238,7 +264,7 @@ class PPO(nn.Module):
     def getContinuousActionAndValue(self, x, action=None, evaluation=False):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-
+        print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd.expand_as(actionMean)
         actionStd = torch.exp(actionLogStd)
@@ -252,7 +278,7 @@ class PPO(nn.Module):
         return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1)
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
-        # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
+        print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
         netsOutputs = []
         if self.using1Dobs:
             # print(f"Trying to feed preActor1D an input of shape {list(obs1D.shape)} while obsSize1D is {self.obsSize1D}")
@@ -264,12 +290,12 @@ class PPO(nn.Module):
         return torch.cat(netsOutputs, -1)
     
 class Memory(object):
-    def __init__(self, capacity, fieldNames=["observations", "actions", "rewards", "dones", "nextObservations"]):
+    def __init__(self, capacity, fieldNames=["observations", "actionsContinuous", "actionsDiscrete", "rewards", "dones", "nextObservations"]):
         self.fieldNames = namedtuple("fieldNames", fieldNames)
         self.memory = deque(maxlen=capacity)
 
-    def push(self, observation, action, reward, done, nextObservation):
-        self.memory.append(self.fieldNames(observation, action, reward, done, nextObservation))
+    def push(self, observation, actionContinuous, actionDiscrete, reward, done, nextObservation):
+        self.memory.append(self.fieldNames(observation, actionContinuous, actionDiscrete, reward, done, nextObservation))
 
     def sample(self, batchSize):
         sampledEntries = random.sample(self.memory, batchSize)

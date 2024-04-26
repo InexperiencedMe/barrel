@@ -46,9 +46,10 @@ for i in range(1, totalSteps+1):
                 observationsThatNeedAction.append(observation)
                 reward = decisionSteps[agent].reward
                 lastObservation = observationBuffer[agent]
-                lastAction = actionsBuffer[agent]
-                if lastObservation != None and (lastAction["continuous"] != None or lastAction["discrete"] != None):
-                    memory[behavior].push(lastObservation, lastAction, reward, False, observation)
+                lastActionContinuous = actionsBuffer[agent]['continuous']
+                lastActionDiscrete = actionsBuffer[agent]['discrete']
+                if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
+                    memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
                     observationBuffer[agent] = observation
                 rewards[agent] += reward
                 
@@ -56,9 +57,10 @@ for i in range(1, totalSteps+1):
                 observation = terminalSteps[agent].obs
                 reward = terminalSteps[agent].reward
                 lastObservation = observationBuffer[agent]
-                lastAction = actionsBuffer[agent]
-                if lastObservation != None and (lastAction["continuous"] != None or lastAction["discrete"] != None):
-                    memory[behavior].push(lastObservation, lastAction, reward, True, observation)
+                lastActionContinuous = actionsBuffer[agent]['continuous']
+                lastActionDiscrete = actionsBuffer[agent]['discrete']
+                if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
+                    memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
                     observationBuffer[agent] = None
                     # Save rewards only if we made an action before, otherwise the initial state was terminated state
                     rewards[agent] += reward
@@ -116,6 +118,9 @@ for i in range(1, totalSteps+1):
                     minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaContinuous * nextStateLogprobsContinuous - alphaDiscrete * nextStateLogprobsDiscrete)
                     nextQValue = torch.tensor(sampledExperiences.rewards) + torch.logical_not(torch.tensor(sampledExperiences.dones)) * gamma * (minQNextTarget.sum(1)).view(-1)
                 
+                    QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations, sampledExperiences.actionsContinuous).gather(1, sampledExperiences.actionsDiscrete.long().view(-1, 1)).squeeze().view(-1)
+                    QFunction2ActionValues = QNet[behavior].QNet2(sampledExperiences.observations, sampledExperiences.actionsContinuous).gather(1, sampledExperiences.actionsDiscrete.long().view(-1, 1)).squeeze().view(-1)
+
                 elif agents[behavior].usingContinuousActions:
                     nextStateActionsContinuous, nextStateLogProbs, _ = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
                     QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.next_observations, nextStateActionsContinuous)
@@ -123,6 +128,9 @@ for i in range(1, totalSteps+1):
                     minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaContinuous * nextStateLogProbs
                     nextQValue = torch.tensor(sampledExperiences.rewards) + torch.logical_not(torch.tensor(sampledExperiences.dones)) * gamma * (minQNextTarget).view(-1)
                 
+                    QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations, sampledExperiences.actionsContinuous).view(-1)
+                    QFunction2ActionValues = QNet[behavior].QNet2(sampledExperiences.observations, sampledExperiences.actionsContinuous).view(-1)
+
                 elif agents[behavior].usingDiscreteActions:
                     _, nextStateLogProbs, nextStateActionProbs, _ = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
                     QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.nextObservations)
@@ -131,8 +139,9 @@ for i in range(1, totalSteps+1):
                     minQNextTarget = minQNextTarget.sum(dim=1)
                     nextQValue = torch.tensor(sampledExperiences.rewards) + torch.logical_not(torch.tensor(sampledExperiences.dones)) * gamma * (minQNextTarget)
             
-            QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations, sampledExperiences.actions['continuous']).gather(1, sampledExperiences.actions['discrete'].long().view(-1, 1)).squeeze().view(-1)
-            QFunction2ActionValues = QNet[behavior].QNet2(sampledExperiences.observations, sampledExperiences.actions['continuous']).gather(1, sampledExperiences.actions['discrete'].long().view(-1, 1)).squeeze().view(-1)
+                    QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations).gather(1, sampledExperiences.actionsDiscrete).view(-1)
+                    QFunction2ActionValues = QNet[behavior].QNet2(sampledExperiences.observations).gather(1, sampledExperiences.actionsDiscrete).view(-1)
+
             QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
             QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
             QFunctionsTotalLoss = QFunction1Loss + QFunction2Loss
