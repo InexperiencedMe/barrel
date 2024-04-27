@@ -8,6 +8,7 @@ from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 from collections import deque, namedtuple
 import random
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class UnityInterface():
     def __init__(self, envName=None):
