@@ -8,7 +8,8 @@ np.set_printoptions(linewidth=100, precision=2, suppress=True)
 env = UnityInterface(None)
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
-agents, QNet, memory, rewards, observationBuffer, actionsBuffer = {}, {}, {}, {}, {}, {}
+agents, QNet, memory, rewards, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}, {}
+targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
 
 totalAgentsCounts = 0
 for behavior in behaviorNames:
@@ -26,12 +27,13 @@ for behavior in behaviorNames:
     QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
     memory[behavior] = Memory(100)
 
-alpha = 0.2
+    targetEntropy[behavior] = (-torch.log(1 / sum(torch.tensor(env.getSpecs(behavior)["DiscreteActions"])))-torch.tensor(env.getSpecs(behavior)["DiscreteActions"])).to(device)
+    logAlpha[behavior] = torch.zeros(1, requires_grad=True, device=device)
+    alpha[behavior] = logAlpha[behavior].exp().item()
+    alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=1e-3)
+
+# alpha = 0.2
 gamma = 0.99
-# targetEntropy = -targetEntropyScale * torch.log(1 / torch.tensor(envs.single_action_space.n))
-# logAlpha = torch.zeros(1, requires_grad=True, device=device)
-# alpha = logAlpha.exp().item()
-# alphaOptimizer = optim.Adam([logAlpha], lr=q_lr)
 
 
 totalSteps = 100
@@ -115,7 +117,7 @@ for i in range(1, totalSteps+1):
             nextStateActionsDiscrete, nextStateLogprobsDiscrete, _ = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
             QFunction1NextTarget = QNet[behavior].QNet1Target(sampledExperiences.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
             QFunction2NextTarget = QNet[behavior].QNet2Target(sampledExperiences.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
-            minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget).view(-1) - alpha * (nextStateLogProbsContinuous + nextStateLogprobsDiscrete) / 2
+            minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget).view(-1) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogprobsDiscrete) / 2
             nextQValue = torch.tensor(sampledExperiences.rewards) + torch.logical_not(torch.tensor(sampledExperiences.dones)) * gamma * (minQNextTarget).view(-1)
             
         QFunction1ActionValues = QNet[behavior].QNet1(sampledExperiences.observations, torch.stack(sampledExperiences.actionsContinuous), torch.stack(sampledExperiences.actionsDiscrete)).view(-1)
@@ -137,32 +139,26 @@ for i in range(1, totalSteps+1):
         QFunction2Evaluation = QNet[behavior].QNet2(sampledExperiences.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
 
         minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-        actorLoss = ((alpha * (nextStateLogprobsContinuous + nextStateLogprobsDiscrete)/2) - minQEvaluation).mean()
+        actorLoss = ((alpha[behavior] * (nextStateLogprobsContinuous + nextStateLogprobsDiscrete)/2) - minQEvaluation).mean()
 
         agents[behavior].actorOptimizer.zero_grad()
         actorLoss.backward()
         agents[behavior].actorOptimizer.step()
         
-        # # TODO: Auto entropy
-        # # with torch.no_grad():
-        # #     a_c, a_d, lpi_c, lpi_d, p_d = pg.get_action(s_obs, device)
-        # # alpha_loss = (-log_alpha * p_d * (p_d * lpi_c + target_entropy)).sum(1).mean()
-        # # alpha_d_loss = (-log_alpha_d * p_d * (lpi_d + target_entropy_d)).sum(1).mean()
+        with torch.no_grad():
+            _, logProbabilitiesC, _ = agents[behavior].getContinuousActionAndValue(sampledExperiences.nextObservations)
+            _, logProbabilitiesD, _ = agents[behavior].getDiscreteActionAndValue(sampledExperiences.nextObservations)
+        alphaLoss = (-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device))/2 + targetEntropy[behavior])).mean()
 
-        # # a_optimizer.zero_grad()
-        # # alpha_loss.backward()
-        # # a_optimizer.step()
-        # # alpha = log_alpha.exp().detach().cpu().item()
+        alphaOptimizer[behavior].zero_grad()
+        alphaLoss.backward()
+        alphaOptimizer[behavior].step()
+        alpha[behavior] = logAlpha[behavior].exp().item()
 
-        # # a_d_optimizer.zero_grad()
-        # # alpha_d_loss.backward()
-        # # a_d_optimizer.step()
-        # # alpha_d = log_alpha_d.exp().detach().cpu().item()
-
-        # # update the target network
-        # if i % 2 == 0:
-        #     for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1_target.parameters()):
-        #         targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
-        #     for param, targetParam in zip(QNet[behavior].QNet2.parameters(), QNet[behavior].QNet2_target.parameters()):
-        #         targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
+        # update the target network
+        if i % 2 == 0:
+            for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1Target.parameters()):
+                targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
+            for param, targetParam in zip(QNet[behavior].QNet2.parameters(), QNet[behavior].QNet2Target.parameters()):
+                targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
 env.close()
