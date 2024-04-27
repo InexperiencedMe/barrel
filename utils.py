@@ -3,7 +3,7 @@ import torch
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
 import torch.nn as nn
 import torch.optim as optim
-import torch.functional as F
+import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 from collections import deque, namedtuple
@@ -155,7 +155,8 @@ class QNetwork(nn.Module):
         obs1D, obs3D = processObservations(x)
         standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
-        return self.criticFinal(torch.cat(standardObsFeatures, actionObsFeatures))
+        # print(f"Will try to cat standardObsFeatures of shape {standardObsFeatures.shape} and actionObsFeatures of shape: {actionObsFeatures.shape}")
+        return self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
 
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         netsOutputs = []
@@ -170,18 +171,25 @@ class QNetwork(nn.Module):
     
     def getActionRepresentationForInput(self, actionsContinuous=None, actionsDiscrete=None):
         featuresList = []
+        # print(f"func getActionRepresentationForInput, where C:{actionsContinuous}, D:{actionsDiscrete}")
         if actionsContinuous != None:
+            # print(f"actionsContinuous: {actionsContinuous}")
+            # print(f"actionsContinuous.shape: {actionsContinuous.shape}")
             featuresC = torch.tensor(actionsContinuous)
             featuresList.append(featuresC)
 
         if actionsDiscrete != None:
+            # print(f"actionsDiscrete: {actionsDiscrete}")
             onehots = []
             for i, discreteSize in enumerate(self.envSpecs["DiscreteActions"]):
+                # print(f"i: {i}, analyzed discrete action size: {discreteSize}")
+                # print(f"onehotting actionsDiscrete {actionsDiscrete}")
                 onehots.append(F.one_hot(actionsDiscrete[:, i], discreteSize))
             featuresList.append(torch.cat(onehots, -1))
     
         features = torch.cat(featuresList, -1)
-        print(f"Final input respresentation (first 3):\n{features[:3]}")
+        # print(f"Final input respresentation (first 3):\n{features[:3]}")
+        return features
 
 
 class SoftQNetwork():
@@ -257,28 +265,29 @@ class PPO(nn.Module):
         if action is None:
             action = torch.stack([categorical.sample() for categorical in multi_categoricals])
         logprobs = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)])
-        probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
+        # probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
         entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
-        return action.T, logprobs.sum(0), probs.sum(0), entropies.sum(0)
+        # print(f"Discrete logprobs are {logprobs} oftorch.min(QFunction1NextTarget, QFunction2NextTarget) shape {logprobs.shape} and we will sum them along 0: {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
+        return action.T, logprobs.sum(0), entropies.sum(0)
     
-    def getContinuousActionAndValue(self, x, action=None, evaluation=False):
+    def getContinuousActionAndValue(self, x, evaluation=False):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-        print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
+        # print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd.expand_as(actionMean)
         actionStd = torch.exp(actionLogStd)
         probabilities = Normal(actionMean, actionStd)
-        if action is None:
-            if evaluation == True:
-                action = actionMean
-            else:
-                action = probabilities.rsample()
+        if evaluation == True:
+            actionSample = actionMean
+        else:
+            actionSample = probabilities.rsample()
+        action = torch.tanh(actionSample)
         # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
         return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1)
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
-        print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
+        # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
         netsOutputs = []
         if self.using1Dobs:
             # print(f"Trying to feed preActor1D an input of shape {list(obs1D.shape)} while obsSize1D is {self.obsSize1D}")
