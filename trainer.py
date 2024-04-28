@@ -54,23 +54,21 @@ for i in range(1, totalSteps+1):
                 observation = decisionSteps[agent].obs
                 observationsThatNeedAction.append(observation)
                 reward = decisionSteps[agent].reward
+                print(f"agent {agent}, observationBuffer: {observationBuffer} of len {len(observation)}")
                 lastObservation = observationBuffer[agent]
                 lastActionContinuous = actionsBuffer[agent]['continuous']
                 lastActionDiscrete = actionsBuffer[agent]['discrete']
                 if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
                     memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
-                    observationBuffer[agent] = observation
+                observationBuffer[agent] = observation
                 rewards[agent] += reward
                 
-                # BUG: Observation buffer isnt working right
-
             for agent in terminalSteps:
                 observation = terminalSteps[agent].obs
                 reward = terminalSteps[agent].reward
                 lastObservation = observationBuffer[agent]
                 lastActionContinuous = actionsBuffer[agent]['continuous']
                 lastActionDiscrete = actionsBuffer[agent]['discrete']
-                print(f"{lastObservation != None}, {lastActionContinuous != None}, {lastActionDiscrete != None}")
                 if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
                     memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
                     observationBuffer[agent] = None
