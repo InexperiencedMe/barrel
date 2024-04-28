@@ -165,7 +165,7 @@ class QNetwork(nn.Module):
             netsOutputs.append(self.preCritic1D(obs1D))
         if self.using3Dobs:
             netsOutputs.append(self.preCritic3D(obs3D))
-        return torch.cat(netsOutputs)
+        return torch.cat(netsOutputs, -1)
 
     def getTotalActionSize(self):
         return self.continuousActionSize + sum(self.envSpecs["DiscreteActions"])
@@ -205,11 +205,11 @@ class SoftQNetwork():
         self.QNetsOptimizer = optim.Adam(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
         self.tau = 0.005
 
-class PPO(nn.Module):
+class SAC(nn.Module):
     # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
     # TODO: Think about what variable should be local. Not all vars need "self."
     def __init__(self, envSpecs):
-        super(PPO, self).__init__()
+        super(SAC, self).__init__()
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
         self.obsChannels3D = self.obsSize3D[0] # first shape dim is channels
@@ -267,9 +267,9 @@ class PPO(nn.Module):
             action = torch.stack([categorical.sample() for categorical in multi_categoricals])
         logprobs = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)])
         # probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
-        entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
+        # entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
         # print(f"Discrete logprobs are {logprobs} oftorch.min(QFunction1NextTarget, QFunction2NextTarget) shape {logprobs.shape} and we will sum them along 0: {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
-        return action.T, logprobs.sum(0), entropies.sum(0)
+        return action.T, logprobs.sum(0)
     
     def getContinuousActionAndValue(self, x, evaluation=False):
         obs1D, obs3D = processObservations(x)
@@ -285,7 +285,7 @@ class PPO(nn.Module):
             actionSample = probabilities.rsample()
         action = torch.tanh(actionSample)
         # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
-        return action, probabilities.log_prob(action).sum(-1), probabilities.entropy().sum(-1)
+        return action, probabilities.log_prob(action).sum(-1)
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
         # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
