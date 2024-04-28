@@ -205,10 +205,13 @@ class SoftQNetwork():
         self.QNetsOptimizer = optim.Adam(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
         self.tau = 0.005
 
+LOG_STD_MAX = 2
+LOG_STD_MIN = -5
+
 class SAC(nn.Module):
     # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
     # TODO: Think about what variable should be local. Not all vars need "self."
-    def __init__(self, envSpecs):
+    def __init__(self, envSpecs, continuousActionLowBound = -1, continuousActionHighBound = 1):
         super(SAC, self).__init__()
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
@@ -223,10 +226,10 @@ class SAC(nn.Module):
 
         if self.using1Dobs:      
             self.preActor1D = nn.Sequential(
-                layerInit(nn.Linear(self.obsSize1D, 256)), nn.Tanh(),
-                layerInit(nn.Linear(256, 128)), nn.Tanh(),
-                layerInit(nn.Linear(128, 64)), nn.Tanh())
-            self.preActor1DoutputSize = 64
+                layerInit(nn.Linear(self.obsSize1D, 512)), nn.Tanh(),
+                layerInit(nn.Linear(512, 256)), nn.Tanh(),
+                layerInit(nn.Linear(256, 256)), nn.Tanh())
+            self.preActor1DoutputSize = 256
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
@@ -242,14 +245,17 @@ class SAC(nn.Module):
 
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
-                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 64)), nn.Tanh(),
-                layerInit(nn.Linear(64, self.continuousActionSize), std=0.01))        
-            self.actorLogStd = nn.Parameter(torch.zeros(self.continuousActionSize))
+                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256)), nn.Tanh(),
+                layerInit(nn.Linear(256, self.continuousActionSize), std=0.01))        
+            self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
+            self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
+            self.register_buffer("continuousActionBias", torch.tensor((continuousActionHighBound + continuousActionLowBound) / 2.0, dtype=torch.float32))
+
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
-                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 64)), nn.Tanh(),
-                layerInit(nn.Linear(64, sum(self.envSpecs["DiscreteActions"])), std=0.01))
+                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256)), nn.Tanh(),
+                layerInit(nn.Linear(256, sum(self.envSpecs["DiscreteActions"])), std=0.01))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
         self.actorOptimizer = optim.Adam(list(self.parameters()), lr=3e-4)
@@ -275,17 +281,25 @@ class SAC(nn.Module):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         # print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
+
         actionMean = self.actorContinuous(observationFeatures)
-        actionLogStd = self.actorLogStd.expand_as(actionMean)
-        actionStd = torch.exp(actionLogStd)
-        probabilities = Normal(actionMean, actionStd)
+        actionLogStd = torch.tanh(self.actorLogStd(observationFeatures))
+        actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp / Denis Yarats
+        actionStd = actionLogStd.exp()
+        distribution = Normal(actionMean, actionStd)
+
         if evaluation == True:
             actionSample = actionMean
         else:
-            actionSample = probabilities.rsample()
-        action = torch.tanh(actionSample)
-        # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
-        return action, probabilities.log_prob(action).sum(-1)
+            actionSample = distribution.rsample()
+        
+        actionSampleTanh = torch.tanh(actionSample)
+        action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
+        logProbs = distribution.log_prob(actionSample)
+        logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)
+        logProbs = logProbs.sum(-1)
+        
+        return action, logProbs
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
         # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
