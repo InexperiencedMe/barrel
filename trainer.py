@@ -8,10 +8,10 @@ np.set_printoptions(linewidth=100, precision=2, suppress=True)
 env = UnityInterface(None)
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
-agents, QNet, memory, rewards, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}, {}
 targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
 
-totalAgentsCounts = 0
+agents, QNet, memory, rewards, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}, {}
+totalAgentsCounts = 10
 for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
     
@@ -20,7 +20,6 @@ rewards = np.zeros(totalAgentsCounts)
 observationBuffer = [None] * totalAgentsCounts
 for i in range(totalAgentsCounts):
     actionsBuffer[i] = {'continuous': None, 'discrete': None}
-observationBuffer = env.getInitialObservations(observationBuffer)
 
 for behavior in behaviorNames:
     agents[behavior] = SAC(env.getSpecs(behavior))
@@ -42,19 +41,19 @@ for behavior in behaviorNames:
 # alpha = 0.2
 gamma = 0.99
 
-
-totalSteps = 1000000
+totalSteps = 10000
 for i in range(1, totalSteps+1):
     with torch.no_grad():
         for behavior in behaviorNames:
             decisionSteps, terminalSteps = env.getSteps(behavior)
-            # print(f"For behavior {behavior} in step {i}/{totalSteps} we have decisionSteps agents {list(decisionSteps)} and terminal steps {list(terminalSteps)}")
+            print(f"For behavior {behavior} in step {i}/{totalSteps} we have decisionSteps agents {list(decisionSteps)} and terminal steps {list(terminalSteps)}")
             observationsThatNeedAction = []
             for agent in decisionSteps:
+
                 observation = decisionSteps[agent].obs
                 observationsThatNeedAction.append(observation)
                 reward = decisionSteps[agent].reward
-                print(f"agent {agent}, observationBuffer: {observationBuffer} of len {len(observation)}")
+                # print(f"agent {agent}, observationBuffer: {observationBuffer} of len {len(observation)}")
                 lastObservation = observationBuffer[agent]
                 lastActionContinuous = actionsBuffer[agent]['continuous']
                 lastActionDiscrete = actionsBuffer[agent]['discrete']
@@ -74,7 +73,7 @@ for i in range(1, totalSteps+1):
                     observationBuffer[agent] = None
                     # Save rewards only if we made an action before, otherwise the initial state was terminated state
                     rewards[agent] += reward
-                    print(f"Final reward: {rewards[agent]:.4f}")
+                    print(f"Final reward: {rewards[agent]:.2f}")
                 rewards[agent] = 0
 
             
@@ -133,13 +132,14 @@ for i in range(1, totalSteps+1):
             QFunction1NextTarget = QNet[behavior].QNet1Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
             QFunction2NextTarget = QNet[behavior].QNet2Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
             minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget).view(-1) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider
-            nextQValue = torch.tensor(mem.rewards) + torch.logical_not(torch.tensor(mem.dones)) * gamma * (minQNextTarget).view(-1)
+            nextQValue = torch.tensor(mem.rewards) + torch.logical_not(torch.tensor(mem.dones)) * gamma * minQNextTarget.view(-1)
             
         QFunction1ActionValues = QNet[behavior].QNet1(mem.observations, torch.stack(mem.actionsContinuous) if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete) if agents[behavior].usingDiscreteActions else None).view(-1)
         QFunction2ActionValues = QNet[behavior].QNet2(mem.observations, torch.stack(mem.actionsContinuous) if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete) if agents[behavior].usingDiscreteActions else None).view(-1)
         QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
         QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
         QFunctionsTotalLoss = QFunction1Loss + QFunction2Loss
+        print(f"QFunction loss: {QFunctionsTotalLoss:.2f}")
         
         QNet[behavior].QNetsOptimizer.zero_grad()
         QFunctionsTotalLoss.backward()
@@ -148,7 +148,7 @@ for i in range(1, totalSteps+1):
 
 
         # Actor update
-        stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, divider = None, None, 0, 0, 0
+        stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, divider = None, None, torch.tensor(0), torch.tensor(0), 0
 
         if agents[behavior].usingContinuousActions:
             stateActionsContinuous, stateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.observations)
@@ -161,7 +161,8 @@ for i in range(1, totalSteps+1):
         QFunction2Evaluation = QNet[behavior].QNet2(mem.observations, stateActionsContinuous, stateActionsDiscrete)
 
         minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-        actorLoss = ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation).mean()
+        actorLoss = (minQEvaluation.view(-1) - (alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider)).mean()
+        print(f"Actor loss: {actorLoss:.2f}")
 
         agents[behavior].actorOptimizer.zero_grad()
         actorLoss.backward()
@@ -174,12 +175,13 @@ for i in range(1, totalSteps+1):
             if agents[behavior].usingDiscreteActions:
                 _, logProbabilitiesD = agents[behavior].getDiscreteActionAndValue(mem.nextObservations)
         alphaLoss = (-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior])).mean()
+        print(f"Alpha loss: {alphaLoss:.2f}")
 
         alphaOptimizer[behavior].zero_grad()
         alphaLoss.backward()
         alphaOptimizer[behavior].step()
         alpha[behavior] = logAlpha[behavior].exp().item()
-
+        print(f"Alpha: {alpha[behavior]:.2f}")
         # update the target network
         if i % 2 == 0:
             for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1Target.parameters()):

@@ -65,12 +65,12 @@ class UnityInterface():
             agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         return agentsCount
 
-    def getInitialObservations(self, bufferList):
-        for behavior in self.behaviorNames:
-            decisionSteps, _ = self.env.get_steps(behavior)
-            for agentNr in decisionSteps:
-                bufferList[agentNr] = decisionSteps[agentNr].obs
-        return bufferList
+    # def getInitialObservations(self, bufferList):
+    #     for behavior in self.behaviorNames:
+    #         decisionSteps, _ = self.env.get_steps(behavior)
+    #         for agentNr in decisionSteps:
+    #             bufferList[agentNr] = decisionSteps[agentNr].obs
+    #     return bufferList
 
 def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -150,7 +150,7 @@ class QNetwork(nn.Module):
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
         self.criticFinal = nn.Sequential(layerInit(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 64), std=0.01), nn.Tanh(),
-                                                 layerInit(nn.Linear(64, 1)), nn.Tanh(), nn.Flatten())
+                                                 layerInit(nn.Linear(64, 1)), nn.Flatten())
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
