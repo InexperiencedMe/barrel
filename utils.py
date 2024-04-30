@@ -317,6 +317,7 @@ class Memory(object):
         self.memory = deque(maxlen=capacity)
 
     def push(self, observation, actionContinuous, actionDiscrete, reward, done, nextObservation):
+        # print(f"Appending a memory: { self.fieldNames(observation, actionContinuous, actionDiscrete, reward, done, nextObservation)}")
         self.memory.append(self.fieldNames(observation, actionContinuous, actionDiscrete, reward, done, nextObservation))
 
     def sample(self, batchSize):

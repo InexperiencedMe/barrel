@@ -25,19 +25,21 @@ for i in range(totalAgentsCounts):
 for behavior in behaviorNames:
     agents[behavior] = SAC(env.getSpecs(behavior)).to(device)
     QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
-    memory[behavior] = Memory(10000)
+    memory[behavior] = Memory(100000)
 
     assert agents[behavior].usingContinuousActions or agents[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
 
-    targetEntropy[behavior] = torch.tensor((0), dtype=torch.float, device=device)
-    if agents[behavior].usingDiscreteActions:
-        targetEntropy[behavior] -= torch.log(1 / sum(torch.tensor(env.getSpecs(behavior)["DiscreteActions"]))).to(device)
-    if agents[behavior].usingContinuousActions:
-        targetEntropy[behavior] -= torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
+
+    alpha[behavior] = 0.2
+    # targetEntropy[behavior] = torch.tensor((0), dtype=torch.float, device=device)
+    # if agents[behavior].usingDiscreteActions:
+    #     targetEntropy[behavior] -= torch.log(1 / sum(torch.tensor(env.getSpecs(behavior)["DiscreteActions"]))).to(device)
+    # if agents[behavior].usingContinuousActions:
+    #     targetEntropy[behavior] -= torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
     
-    logAlpha[behavior] = torch.zeros(1, requires_grad=True, device=device)
-    alpha[behavior] = logAlpha[behavior].exp().item()
-    alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=1e-3)
+    # logAlpha[behavior] = torch.zeros(1, requires_grad=True, device=device)
+    # alpha[behavior] = logAlpha[behavior].exp().item()
+    # alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=1e-3)
 
 # alpha = 0.2
 gamma = 0.99
@@ -62,6 +64,7 @@ for i in range(1, totalSteps+1):
                 lastObservation = observationBuffer[agent]
                 lastActionContinuous = actionsBuffer[agent]['continuous']
                 lastActionDiscrete = actionsBuffer[agent]['discrete']
+                # print(f"\n\nDECISION step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nLastActionC: {lastActionContinuous},\nCurrentReward:{reward}\n")
                 if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
                     memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
                 observationBuffer[agent] = observation
@@ -73,12 +76,16 @@ for i in range(1, totalSteps+1):
                 lastObservation = observationBuffer[agent]
                 lastActionContinuous = actionsBuffer[agent]['continuous']
                 lastActionDiscrete = actionsBuffer[agent]['discrete']
+                # print(f"TERMINAL step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nCurrentReward:{reward}\n")
                 if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
                     memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
                     observationBuffer[agent] = None
+                    actionsBuffer[agent]['continuous'] = None
+                    actionsBuffer[agent]['discrete'] = None
                     # Save rewards only if we made an action before, otherwise the initial state was terminated state
                     rewards[agent] += reward
-                    # print(f"Final reward: {rewards[agent]:>.2f}")
+                    if rewards[agent] > 2:
+                        print(f"Final reward: {rewards[agent]:>.2f}")
                 rewards[agent] = 0
 
             
@@ -181,18 +188,18 @@ for i in range(1, totalSteps+1):
 
 
                 # startEntropyOptim = time.time()
-                with torch.no_grad():
-                    logProbabilitiesC, logProbabilitiesD = torch.tensor(0, device=device), torch.tensor(0, device=device)
-                    if agents[behavior].usingContinuousActions:
-                        _, logProbabilitiesC = agents[behavior].getContinuousActionAndValue(mem.nextObservations)
-                    if agents[behavior].usingDiscreteActions:
-                        _, logProbabilitiesD = agents[behavior].getDiscreteActionAndValue(mem.nextObservations)
-                alphaLoss = (-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior])).mean()
+                # with torch.no_grad():
+                #     logProbabilitiesC, logProbabilitiesD = torch.tensor(0, device=device), torch.tensor(0, device=device)
+                #     if agents[behavior].usingContinuousActions:
+                #         _, logProbabilitiesC = agents[behavior].getContinuousActionAndValue(mem.observations)
+                #     if agents[behavior].usingDiscreteActions:
+                #         _, logProbabilitiesD = agents[behavior].getDiscreteActionAndValue(mem.observations)
+                # alphaLoss = (-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior])).mean()
 
-                alphaOptimizer[behavior].zero_grad()
-                alphaLoss.backward()
-                alphaOptimizer[behavior].step()
-                alpha[behavior] = logAlpha[behavior].exp().item()
+                # alphaOptimizer[behavior].zero_grad()
+                # alphaLoss.backward()
+                # alphaOptimizer[behavior].step()
+                # alpha[behavior] = logAlpha[behavior].exp().item()
                 # endEntropyOptim = time.time()
                 # entropyOptimTime = endEntropyOptim-startEntropyOptim
         # update the target network
@@ -204,8 +211,9 @@ for i in range(1, totalSteps+1):
                     targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
         
         if i % 100 == 0:
-            print(f"Step {i}, i % 100 = {i%100}, so we're here")
-            print(f"Alpha: {alpha[behavior]:>8.2f}, Alpha loss: {alphaLoss:>8.2f}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
+            # print(f"Step {i}, i % 100 = {i%100}, so we're here")
+            # print(f"Alpha: {alpha[behavior]:>8.2f}, Alpha loss: {alphaLoss:>8.2f}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
+            print(f"Alpha: {alpha[behavior]}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
     # endOptimization = time.time()
     # optimizationTime = endOptimization-startOptimization
     # print(f"{1/optimizationTime:>4.1f} optimizations per second (QNETS: {1/qnetsOptimTime:>4.1f}, Actor: {1/actorOptimTime:>4.1f}, Entropy: {1/entropyOptimTime:>4.1f}), {1/inferenceTime:>4.1f} inferences per second")
