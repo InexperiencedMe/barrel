@@ -119,7 +119,7 @@ def processObservations(x):
         # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
         # print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
         # print(f"Outputting stacked allObs1D and allObs3D of shapes: {torch.stack(allObs1D).shape}, {torch.stack(allObs3D).shape}")
-        return torch.stack(allObs1D), torch.stack(allObs3D)
+        return torch.stack(allObs1D).to(device), torch.stack(allObs3D).to(device)
 
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
@@ -136,11 +136,10 @@ class QNetwork(nn.Module):
         self.usingContinuousActions = self.continuousActionSize > 0
 
         if self.using1Dobs:
-            self.preCritic1D = nn.Sequential(
-                layerInit(nn.Linear(self.obsSize1D, 256)), nn.Tanh(),
-                layerInit(nn.Linear(256, 128)), nn.Tanh(),
-                layerInit(nn.Linear(128, 64)), nn.Tanh())
             self.preCritic1DoutputSize = 64
+            self.preCritic1D = nn.Sequential(
+                layerInit(nn.Linear(self.obsSize1D, 128)), nn.Tanh(),
+                layerInit(nn.Linear(128, self.preCritic1DoutputSize)), nn.Tanh())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
@@ -149,8 +148,7 @@ class QNetwork(nn.Module):
                 layerInit(nn.Conv2d(32, 32, 3, stride=1)), nn.Tanh(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(layerInit(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 64), std=0.01), nn.Tanh(),
-                                                 layerInit(nn.Linear(64, 1)), nn.Flatten())
+        self.criticFinal = nn.Sequential(layerInit(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1), std=0.01), nn.Flatten())
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
@@ -193,12 +191,13 @@ class QNetwork(nn.Module):
         return features
 
 
-class SoftQNetwork():
+class SoftQNetwork(nn.Module):
     def __init__(self, envSpecs):
-        self.QNet1 = QNetwork(envSpecs)
-        self.QNet2 = QNetwork(envSpecs)
-        self.QNet1Target = QNetwork(envSpecs)
-        self.QNet2Target = QNetwork(envSpecs)
+        super(SoftQNetwork, self).__init__()
+        self.QNet1 = QNetwork(envSpecs).to(device)
+        self.QNet2 = QNetwork(envSpecs).to(device)
+        self.QNet1Target = QNetwork(envSpecs).to(device)
+        self.QNet2Target = QNetwork(envSpecs).to(device)
         self.QNet1Target.load_state_dict(self.QNet1.state_dict())
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
@@ -225,11 +224,10 @@ class SAC(nn.Module):
         assert self.using1Dobs or self.using3Dobs, "No 1D or 3D observations and you expect it to work?!?!?!?"
 
         if self.using1Dobs:      
-            self.preActor1D = nn.Sequential(
-                layerInit(nn.Linear(self.obsSize1D, 512)), nn.Tanh(),
-                layerInit(nn.Linear(512, 256)), nn.Tanh(),
-                layerInit(nn.Linear(256, 256)), nn.Tanh())
             self.preActor1DoutputSize = 256
+            self.preActor1D = nn.Sequential(
+                layerInit(nn.Linear(self.obsSize1D, 256)), nn.Tanh(),
+                layerInit(nn.Linear(256, self.preActor1DoutputSize)), nn.Tanh())
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
@@ -245,8 +243,8 @@ class SAC(nn.Module):
 
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
-                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256)), nn.Tanh(),
-                layerInit(nn.Linear(256, self.continuousActionSize), std=0.01))        
+                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128)), nn.Tanh(),
+                layerInit(nn.Linear(128, self.continuousActionSize), std=0.01))        
             self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
             self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
             self.register_buffer("continuousActionBias", torch.tensor((continuousActionHighBound + continuousActionLowBound) / 2.0, dtype=torch.float32))
