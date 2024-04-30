@@ -42,10 +42,10 @@ for behavior in behaviorNames:
 # alpha = 0.2
 gamma = 0.99
 batchSize = 64
-actorUpdateFrequency = 10
+actorUpdateFrequency = 5
 qnetsUpdateFrequency = 1
 
-totalSteps = 100
+totalSteps = 100000
 for i in range(1, totalSteps+1):
     # startInference = time.time()
     with torch.no_grad():
@@ -97,11 +97,11 @@ for i in range(1, totalSteps+1):
                     behaviorActionsForThisStep['discrete'], _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction)
 
             # Transcribe the actions to buffer
-                for i, agent in enumerate(decisionSteps):
+                for j, agent in enumerate(decisionSteps):
                     if nrOfContinuousActions > 0:
-                        actionsBuffer[agent]['continuous'] =  behaviorActionsForThisStep['continuous'][i]
+                        actionsBuffer[agent]['continuous'] =  behaviorActionsForThisStep['continuous'][j]
                     if nrOfDiscreteActions > 0:
-                        actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][i]
+                        actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
                     
                 # obsShapes = []
                 # obsDimensionalites = []
@@ -153,7 +153,7 @@ for i in range(1, totalSteps+1):
         # qnetsOptimTime = endQnetsOptim-startQnetsOptim
 
         # Actor update
-        if i % actorUpdateFrequency:
+        if i % actorUpdateFrequency == 0:
             for j in range(actorUpdateFrequency):
                 # startActorOptim = time.time()
                 if j > 0:
@@ -203,10 +203,11 @@ for i in range(1, totalSteps+1):
                 for param, targetParam in zip(QNet[behavior].QNet2.parameters(), QNet[behavior].QNet2Target.parameters()):
                     targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
         
-        if i % 10 == 0:
+        if i % 100 == 0:
+            print(f"Step {i}, i % 100 = {i%100}, so we're here")
             print(f"Alpha: {alpha[behavior]:>8.2f}, Alpha loss: {alphaLoss:>8.2f}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
-        endOptimization = time.time()
-        optimizationTime = endOptimization-startOptimization
-        # print(f"{1/optimizationTime:>4.1f} optimizations per second (QNETS: {1/qnetsOptimTime:>4.1f}, Actor: {1/actorOptimTime:>4.1f}, Entropy: {1/entropyOptimTime:>4.1f}), {1/inferenceTime:>4.1f} inferences per second")
-        # print(f"{1/optimizationTime:>4.1f} optimizations per second, {1/inferenceTime:>4.1f} inferences per second")
+    # endOptimization = time.time()
+    # optimizationTime = endOptimization-startOptimization
+    # print(f"{1/optimizationTime:>4.1f} optimizations per second (QNETS: {1/qnetsOptimTime:>4.1f}, Actor: {1/actorOptimTime:>4.1f}, Entropy: {1/entropyOptimTime:>4.1f}), {1/inferenceTime:>4.1f} inferences per second")
+    # print(f"{1/optimizationTime:>4.1f} optimizations per second, {1/inferenceTime:>4.1f} inferences per second")
 env.close()
