@@ -65,18 +65,6 @@ class UnityInterface():
             agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         return agentsCount
 
-    # def getInitialObservations(self, bufferList):
-    #     for behavior in self.behaviorNames:
-    #         decisionSteps, _ = self.env.get_steps(behavior)
-    #         for agentNr in decisionSteps:
-    #             bufferList[agentNr] = decisionSteps[agentNr].obs
-    #     return bufferList
-
-def layerInit(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
 def calculateConvNetOutputSize(net, inputSize):
     return torch.numel(net(torch.ones(inputSize)))
 
@@ -138,25 +126,26 @@ class QNetwork(nn.Module):
         if self.using1Dobs:
             self.preCritic1DoutputSize = 64
             self.preCritic1D = nn.Sequential(
-                layerInit(nn.Linear(self.obsSize1D, 128)), nn.Tanh(),
-                layerInit(nn.Linear(128, self.preCritic1DoutputSize)), nn.Tanh())
+                nn.Linear(self.obsSize1D, 128), nn.Tanh(),
+                nn.Linear(128, self.preCritic1DoutputSize), nn.Tanh())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
-                layerInit(nn.Conv2d(self.obsChannels3D, 16, 7, stride=4)), nn.Tanh(),
-                layerInit(nn.Conv2d(16, 32, 5, stride=2)), nn.Tanh(),
-                layerInit(nn.Conv2d(32, 32, 3, stride=1)), nn.Tanh(), nn.Flatten())
+                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
+                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
+                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(layerInit(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1), std=0.01), nn.Flatten())
+        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1), nn.Flatten())
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
         standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
         # print(f"Will try to cat standardObsFeatures of shape {standardObsFeatures.shape} and actionObsFeatures of shape: {actionObsFeatures.shape}")
+        # print(f"Feeding critic with standards obs features of shape {standardObsFeatures.shape} and actionObsFeatures of shape {actionObsFeatures.shape} to get {torch.cat((standardObsFeatures, actionObsFeatures), -1).shape} total shape")
         return self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
-
+        
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         netsOutputs = []
         if self.using1Dobs:
@@ -226,14 +215,14 @@ class SAC(nn.Module):
         if self.using1Dobs:      
             self.preActor1DoutputSize = 256
             self.preActor1D = nn.Sequential(
-                layerInit(nn.Linear(self.obsSize1D, 256)), nn.Tanh(),
-                layerInit(nn.Linear(256, self.preActor1DoutputSize)), nn.Tanh())
+                nn.Linear(self.obsSize1D, 256), nn.Tanh(),
+                nn.Linear(256, self.preActor1DoutputSize), nn.Tanh())
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
-                layerInit(nn.Conv2d(self.obsChannels3D, 16, 7, stride=4)), nn.Tanh(),
-                layerInit(nn.Conv2d(16, 32, 5, stride=2)), nn.Tanh(),
-                layerInit(nn.Conv2d(32, 32, 3, stride=1)), nn.Tanh(), nn.Flatten())
+                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
+                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
+                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
 
@@ -243,8 +232,8 @@ class SAC(nn.Module):
 
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
-                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128)), nn.Tanh(),
-                layerInit(nn.Linear(128, self.continuousActionSize), std=0.01))        
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.Tanh(),
+                nn.Linear(128, self.continuousActionSize))        
             self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
             self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
             self.register_buffer("continuousActionBias", torch.tensor((continuousActionHighBound + continuousActionLowBound) / 2.0, dtype=torch.float32))
@@ -252,8 +241,8 @@ class SAC(nn.Module):
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
-                layerInit(nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256)), nn.Tanh(),
-                layerInit(nn.Linear(256, sum(self.envSpecs["DiscreteActions"])), std=0.01))
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
+                nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
         self.actorOptimizer = optim.Adam(list(self.parameters()), lr=3e-4)
@@ -273,6 +262,9 @@ class SAC(nn.Module):
         # probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
         # entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
         # print(f"Discrete logprobs are {logprobs} oftorch.min(QFunction1NextTarget, QFunction2NextTarget) shape {logprobs.shape} and we will sum them along 0: {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
+        # print(f"Logprobs: {logprobs} of shape {logprobs.shape} and we sum(0) it to shape {logprobs.sum(0).shape}")
+        # for action, logprob in zip(action.T, logprob.sum(0)):
+        #     print(f"Action: {action}. LogProb: {logprob.item():.3f}")        
         return action.T, logprobs.sum(0)
     
     def getContinuousActionAndValue(self, x, evaluation=False):
@@ -297,6 +289,9 @@ class SAC(nn.Module):
         logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)
         logProbs = logProbs.sum(-1)
         
+        # for i in range(len(action)):
+        #     print(f"Action: {action[i]}. LogProb: {logProbs[i].item():.3f}")    
+
         return action, logProbs
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):

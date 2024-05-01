@@ -24,7 +24,11 @@ for i in range(totalAgentsCounts):
 
 for behavior in behaviorNames:
     agents[behavior] = SAC(env.getSpecs(behavior)).to(device)
+    for name, params in agents[behavior].named_parameters():
+        print(f"STARTING parameters {name}: {params}")
     QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
+    # for name, params in QNet[behavior].QNet1.named_parameters():
+        # print(f"STARTING QNET1 parameters {name}: {params}")
     memory[behavior] = Memory(100000)
 
     assert agents[behavior].usingContinuousActions or agents[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
@@ -47,81 +51,80 @@ batchSize = 64
 actorUpdateFrequency = 5
 qnetsUpdateFrequency = 1
 
-totalSteps = 100000
+totalSteps = 100
 for i in range(1, totalSteps+1):
     # startInference = time.time()
-    with torch.no_grad():
-        for behavior in behaviorNames:
-            decisionSteps, terminalSteps = env.getSteps(behavior)
-            # print(f"For behavior {behavior} in step {i}/{totalSteps} we have decisionSteps agents {list(decisionSteps)} and terminal steps {list(terminalSteps)}")
-            observationsThatNeedAction = []
-            for agent in decisionSteps:
+    for behavior in behaviorNames:
+        decisionSteps, terminalSteps = env.getSteps(behavior)
+        # print(f"For behavior {behavior} in step {i}/{totalSteps} we have decisionSteps agents {list(decisionSteps)} and terminal steps {list(terminalSteps)}")
+        observationsThatNeedAction = []
+        for agent in decisionSteps:
 
-                observation = decisionSteps[agent].obs
-                observationsThatNeedAction.append(observation)
-                reward = decisionSteps[agent].reward
-                # print(f"agent {agent}, observationBuffer: {observationBuffer} of len {len(observation)}")
-                lastObservation = observationBuffer[agent]
-                lastActionContinuous = actionsBuffer[agent]['continuous']
-                lastActionDiscrete = actionsBuffer[agent]['discrete']
-                # print(f"\n\nDECISION step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nLastActionC: {lastActionContinuous},\nCurrentReward:{reward}\n")
-                if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
-                    memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
-                observationBuffer[agent] = observation
-                rewards[agent] += reward
-                
-            for agent in terminalSteps:
-                observation = terminalSteps[agent].obs
-                reward = terminalSteps[agent].reward
-                lastObservation = observationBuffer[agent]
-                lastActionContinuous = actionsBuffer[agent]['continuous']
-                lastActionDiscrete = actionsBuffer[agent]['discrete']
-                # print(f"TERMINAL step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nCurrentReward:{reward}\n")
-                if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
-                    memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
-                    observationBuffer[agent] = None
-                    actionsBuffer[agent]['continuous'] = None
-                    actionsBuffer[agent]['discrete'] = None
-                    # Save rewards only if we made an action before, otherwise the initial state was terminated state
-                    rewards[agent] += reward
-                    if rewards[agent] > 2:
-                        print(f"Final reward: {rewards[agent]:>.2f}")
-                rewards[agent] = 0
-
+            observation = decisionSteps[agent].obs
+            observationsThatNeedAction.append(observation)
+            reward = decisionSteps[agent].reward
+            # print(f"agent {agent}, observationBuffer: {observationBuffer} of len {len(observation)}")
+            lastObservation = observationBuffer[agent]
+            lastActionContinuous = actionsBuffer[agent]['continuous']
+            lastActionDiscrete = actionsBuffer[agent]['discrete']
+            # print(f"\n\nDECISION step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nLastActionC: {lastActionContinuous},\nCurrentReward:{reward}\n")
+            if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
+                memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
+            observationBuffer[agent] = observation
+            rewards[agent] += reward
             
-            behaviorActionsForThisStep = {}
-            specs = env.getSpecs(behavior)
-            nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
-            nrOfDiscreteActions = len(specs["DiscreteActions"])
-            behaviorActionsForThisStep["continuous"] = torch.zeros((len(decisionSteps), nrOfContinuousActions), dtype=torch.float32, device=device)
-            behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), dtype=torch.int32, device=device)
+        for agent in terminalSteps:
+            observation = terminalSteps[agent].obs
+            reward = terminalSteps[agent].reward
+            lastObservation = observationBuffer[agent]
+            lastActionContinuous = actionsBuffer[agent]['continuous']
+            lastActionDiscrete = actionsBuffer[agent]['discrete']
+            # print(f"TERMINAL step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nCurrentReward:{reward}\n")
+            if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
+                memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
+                observationBuffer[agent] = None
+                actionsBuffer[agent]['continuous'] = None
+                actionsBuffer[agent]['discrete'] = None
+                # Save rewards only if we made an action before, otherwise the initial state was terminated state
+                rewards[agent] += reward
+                if rewards[agent] > 2:
+                    print(f"Final reward: {rewards[agent]:>.2f}")
+            rewards[agent] = 0
 
-            # Batched pass to get actions  
-            if len(observationsThatNeedAction) > 0:
-                if agents[behavior].usingContinuousActions:
-                    behaviorActionsForThisStep['continuous'], _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction)
-                if agents[behavior].usingDiscreteActions:
-                    behaviorActionsForThisStep['discrete'], _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction)
+        
+        behaviorActionsForThisStep = {}
+        specs = env.getSpecs(behavior)
+        nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
+        nrOfDiscreteActions = len(specs["DiscreteActions"])
+        behaviorActionsForThisStep["continuous"] = torch.zeros((len(decisionSteps), nrOfContinuousActions), dtype=torch.float32, device=device)
+        behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), dtype=torch.int32, device=device)
 
-            # Transcribe the actions to buffer
-                for j, agent in enumerate(decisionSteps):
-                    if nrOfContinuousActions > 0:
-                        actionsBuffer[agent]['continuous'] =  behaviorActionsForThisStep['continuous'][j]
-                    if nrOfDiscreteActions > 0:
-                        actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
-                    
-                # obsShapes = []
-                # obsDimensionalites = []
-                # for element in observationsThatNeedAction[0]:
-                #     obsShapes.append(element.shape)
-                #     obsDimensionalites.append(len(element.shape))
-                # print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
+        # Batched pass to get actions  
+        if len(observationsThatNeedAction) > 0:
+            if agents[behavior].usingContinuousActions:
+                behaviorActionsForThisStep['continuous'], _ = agents[behavior].getContinuousActionAndValue(observationsThatNeedAction)
+            if agents[behavior].usingDiscreteActions:
+                behaviorActionsForThisStep['discrete'], _ = agents[behavior].getDiscreteActionAndValue(observationsThatNeedAction)
 
-            # print(f"Setting Continuous actions: {behaviorActionsForThisStep['continuous']}, Discrete actions: {behaviorActionsForThisStep['discrete']}")
-            env.setActions(behavior, behaviorActionsForThisStep['continuous'].cpu().numpy(), behaviorActionsForThisStep['discrete'].cpu().numpy())
-        env.step()
-        # endInference = time.time()
-        # inferenceTime = endInference-startInference
+        # Transcribe the actions to buffer
+            for j, agent in enumerate(decisionSteps):
+                if nrOfContinuousActions > 0:
+                    actionsBuffer[agent]['continuous'] =  behaviorActionsForThisStep['continuous'][j]
+                if nrOfDiscreteActions > 0:
+                    actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
+                
+            # obsShapes = []
+            # obsDimensionalites = []
+            # for element in observationsThatNeedAction[0]:
+            #     obsShapes.append(element.shape)
+            #     obsDimensionalites.append(len(element.shape))
+            # print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
+
+        # print(f"Setting Continuous actions: {behaviorActionsForThisStep['continuous']}, Discrete actions: {behaviorActionsForThisStep['discrete']}")
+        env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'].detach().cpu().numpy())
+    env.step()
+    # endInference = time.time()
+    # inferenceTime = endInference-startInference
 
 
     # print(f"memory length for behavior {behavior}: {len(memory[behavior])}")
@@ -218,4 +221,12 @@ for i in range(1, totalSteps+1):
     # optimizationTime = endOptimization-startOptimization
     # print(f"{1/optimizationTime:>4.1f} optimizations per second (QNETS: {1/qnetsOptimTime:>4.1f}, Actor: {1/actorOptimTime:>4.1f}, Entropy: {1/entropyOptimTime:>4.1f}), {1/inferenceTime:>4.1f} inferences per second")
     # print(f"{1/optimizationTime:>4.1f} optimizations per second, {1/inferenceTime:>4.1f} inferences per second")
+
+for behavior in behaviorNames:
+    for name, params in agents[behavior].named_parameters():
+        print(f"ENDING parameters {name}: {params}")
+#     for name, params in QNet[behavior].QNet1.named_parameters():
+#         print(f"ENDING QNET1 parameters {name}: {params}")
+    
+
 env.close()
