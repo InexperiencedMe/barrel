@@ -24,12 +24,12 @@ for i in range(totalAgentsCounts):
 
 for behavior in behaviorNames:
     agents[behavior] = SAC(env.getSpecs(behavior)).to(device)
-    for name, params in agents[behavior].named_parameters():
-        print(f"STARTING parameters {name}: {params}")
+    # for name, params in agents[behavior].named_parameters():
+    #     print(f"STARTING parameters {name}: {params}")
     QNet[behavior] = SoftQNetwork(env.getSpecs(behavior))
-    # for name, params in QNet[behavior].QNet1.named_parameters():
-        # print(f"STARTING QNET1 parameters {name}: {params}")
-    memory[behavior] = Memory(100000)
+    for name, params in agents[behavior].named_parameters():
+        print(f"STARTING agent parameters {name}: {params}")
+    memory[behavior] = Memory(10000)
 
     assert agents[behavior].usingContinuousActions or agents[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
 
@@ -49,9 +49,9 @@ for behavior in behaviorNames:
 gamma = 0.99
 batchSize = 64
 actorUpdateFrequency = 5
-qnetsUpdateFrequency = 1
+qnetsUpdateFrequency = 2
 
-totalSteps = 100
+totalSteps = 20000
 for i in range(1, totalSteps+1):
     # startInference = time.time()
     for behavior in behaviorNames:
@@ -126,105 +126,104 @@ for i in range(1, totalSteps+1):
     # endInference = time.time()
     # inferenceTime = endInference-startInference
 
-
-    # print(f"memory length for behavior {behavior}: {len(memory[behavior])}")
-    if len(memory[behavior]) > batchSize:
-        # startOptimization = time.time()
-        mem = memory[behavior].sample(min(len(memory[behavior]), batchSize))
-        # print(f"Sampled experiences: {mem}")
-        # Critic update
-        # print(f"Sampled experiences:{mem}")
-        # startQnetsOptim = time.time()
-        with torch.no_grad():
-            nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, divider = None, None, 0, 0, 0
-            
-            if agents[behavior].usingContinuousActions:
-                nextStateActionsContinuous, nextStateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.nextObservations)
-                divider += 1
-            if agents[behavior].usingDiscreteActions:
-                nextStateActionsDiscrete, nextStateLogProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.nextObservations)
-                divider += 1
-
-            QFunction1NextTarget = QNet[behavior].QNet1Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
-            QFunction2NextTarget = QNet[behavior].QNet2Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
-            minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget).view(-1) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider
-            nextQValue = torch.tensor(mem.rewards, device=device) + torch.logical_not(torch.tensor(mem.dones, device=device)) * gamma * minQNextTarget.view(-1)
-            
-        QFunction1ActionValues = QNet[behavior].QNet1(mem.observations, torch.stack(mem.actionsContinuous).to(device) if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete) if agents[behavior].usingDiscreteActions else None).view(-1)
-        QFunction2ActionValues = QNet[behavior].QNet2(mem.observations, torch.stack(mem.actionsContinuous).to(device) if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete) if agents[behavior].usingDiscreteActions else None).view(-1)
-        QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
-        QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
-        QFunctionsTotalLoss = QFunction1Loss + QFunction2Loss
-        
-        QNet[behavior].QNetsOptimizer.zero_grad()
-        QFunctionsTotalLoss.backward()
-        QNet[behavior].QNetsOptimizer.step()
-        # endQnetsOptim = time.time()
-        # qnetsOptimTime = endQnetsOptim-startQnetsOptim
-
-        # Actor update
-        if i % actorUpdateFrequency == 0:
-            for j in range(actorUpdateFrequency):
-                # startActorOptim = time.time()
-                if j > 0:
-                    mem = memory[behavior].sample(min(len(memory[behavior]), batchSize))
-                stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, divider = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(0, device=device)
+    for behavior in behaviorNames:
+        # print(f"memory length for behavior {behavior}: {len(memory[behavior])}")
+        if len(memory[behavior]) > batchSize:
+            # startOptimization = time.time()
+            mem = memory[behavior].sample(batchSize)
+            # Critic update
+            # print(f"Sampled experiences:{mem}")
+            # startQnetsOptim = time.time()
+            with torch.no_grad():
+                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, divider = None, None, 0, 0, 0
                 
                 if agents[behavior].usingContinuousActions:
-                    stateActionsContinuous, stateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.observations)
+                    nextStateActionsContinuous, nextStateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.nextObservations)
                     divider += 1
                 if agents[behavior].usingDiscreteActions:
-                    stateActionsDiscrete, stateLogProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.observations)
+                    nextStateActionsDiscrete, nextStateLogProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.nextObservations)
                     divider += 1
 
-                QFunction1Evaluation = QNet[behavior].QNet1(mem.observations, stateActionsContinuous, stateActionsDiscrete)
-                QFunction2Evaluation = QNet[behavior].QNet2(mem.observations, stateActionsContinuous, stateActionsDiscrete)
+                QFunction1NextTarget = QNet[behavior].QNet1Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
+                QFunction2NextTarget = QNet[behavior].QNet2Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
+                minQNextTarget = torch.min(QFunction1NextTarget, QFunction2NextTarget).view(-1) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider
+                nextQValue = torch.tensor(mem.rewards, device=device) + torch.logical_not(torch.tensor(mem.dones, device=device)) * gamma * minQNextTarget.view(-1)
+                
+            QFunction1ActionValues = QNet[behavior].QNet1(mem.observations, torch.stack(mem.actionsContinuous).to(device) if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete) if agents[behavior].usingDiscreteActions else None).view(-1)
+            QFunction2ActionValues = QNet[behavior].QNet2(mem.observations, torch.stack(mem.actionsContinuous).to(device) if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete) if agents[behavior].usingDiscreteActions else None).view(-1)
+            QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
+            QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
+            QFunctionsTotalLoss = QFunction1Loss + QFunction2Loss
+            
+            QNet[behavior].QNetsOptimizer.zero_grad()
+            QFunctionsTotalLoss.backward(retain_graph=True)
+            QNet[behavior].QNetsOptimizer.step()
+            # endQnetsOptim = time.time()
+            # qnetsOptimTime = endQnetsOptim-startQnetsOptim
 
-                minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-                actorLoss = ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation.view(-1)).mean()
+            # Actor update
+            if i % actorUpdateFrequency == 0:
+                for j in range(actorUpdateFrequency):
+                    # startActorOptim = time.time()
+                    if j > 0:
+                        mem = memory[behavior].sample(min(len(memory[behavior]), batchSize))
+                    stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, divider = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(0, device=device)
+                    
+                    if agents[behavior].usingContinuousActions:
+                        stateActionsContinuous, stateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.observations)
+                        divider += 1
+                    if agents[behavior].usingDiscreteActions:
+                        stateActionsDiscrete, stateLogProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.observations)
+                        divider += 1
 
-                agents[behavior].actorOptimizer.zero_grad()
-                actorLoss.backward()
-                agents[behavior].actorOptimizer.step()
-                # endActorOptim = time.time()
-                # actorOptimTime = endActorOptim-startActorOptim
+                    QFunction1Evaluation = QNet[behavior].QNet1(mem.observations, stateActionsContinuous, stateActionsDiscrete)
+                    QFunction2Evaluation = QNet[behavior].QNet2(mem.observations, stateActionsContinuous, stateActionsDiscrete)
+
+                    minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
+                    actorLoss = ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation.view(-1)).mean()
+
+                    agents[behavior].actorOptimizer.zero_grad()
+                    actorLoss.backward()
+                    agents[behavior].actorOptimizer.step()
+                    # endActorOptim = time.time()
+                    # actorOptimTime = endActorOptim-startActorOptim
 
 
-                # startEntropyOptim = time.time()
-                # with torch.no_grad():
-                #     logProbabilitiesC, logProbabilitiesD = torch.tensor(0, device=device), torch.tensor(0, device=device)
-                #     if agents[behavior].usingContinuousActions:
-                #         _, logProbabilitiesC = agents[behavior].getContinuousActionAndValue(mem.observations)
-                #     if agents[behavior].usingDiscreteActions:
-                #         _, logProbabilitiesD = agents[behavior].getDiscreteActionAndValue(mem.observations)
-                # alphaLoss = (-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior])).mean()
+                    # startEntropyOptim = time.time()
+                    # with torch.no_grad():
+                    #     logProbabilitiesC, logProbabilitiesD = torch.tensor(0, device=device), torch.tensor(0, device=device)
+                    #     if agents[behavior].usingContinuousActions:
+                    #         _, logProbabilitiesC = agents[behavior].getContinuousActionAndValue(mem.observations)
+                    #     if agents[behavior].usingDiscreteActions:
+                    #         _, logProbabilitiesD = agents[behavior].getDiscreteActionAndValue(mem.observations)
+                    # alphaLoss = (-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior])).mean()
 
-                # alphaOptimizer[behavior].zero_grad()
-                # alphaLoss.backward()
-                # alphaOptimizer[behavior].step()
-                # alpha[behavior] = logAlpha[behavior].exp().item()
-                # endEntropyOptim = time.time()
-                # entropyOptimTime = endEntropyOptim-startEntropyOptim
-        # update the target network
-        if i % qnetsUpdateFrequency == 0:
-            for _ in range(qnetsUpdateFrequency):
-                for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1Target.parameters()):
-                    targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
-                for param, targetParam in zip(QNet[behavior].QNet2.parameters(), QNet[behavior].QNet2Target.parameters()):
-                    targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
-        
-        if i % 100 == 0:
-            # print(f"Step {i}, i % 100 = {i%100}, so we're here")
-            # print(f"Alpha: {alpha[behavior]:>8.2f}, Alpha loss: {alphaLoss:>8.2f}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
-            print(f"Alpha: {alpha[behavior]}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
-    # endOptimization = time.time()
-    # optimizationTime = endOptimization-startOptimization
-    # print(f"{1/optimizationTime:>4.1f} optimizations per second (QNETS: {1/qnetsOptimTime:>4.1f}, Actor: {1/actorOptimTime:>4.1f}, Entropy: {1/entropyOptimTime:>4.1f}), {1/inferenceTime:>4.1f} inferences per second")
-    # print(f"{1/optimizationTime:>4.1f} optimizations per second, {1/inferenceTime:>4.1f} inferences per second")
+                    # alphaOptimizer[behavior].zero_grad()
+                    # alphaLoss.backward()
+                    # alphaOptimizer[behavior].step()
+                    # alpha[behavior] = logAlpha[behavior].exp().item()
+                    # endEntropyOptim = time.time()
+                    # entropyOptimTime = endEntropyOptim-startEntropyOptim
+            # update the target network
+            if i % qnetsUpdateFrequency == 0:
+                for _ in range(qnetsUpdateFrequency):
+                    for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1Target.parameters()):
+                        targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
+                    for param, targetParam in zip(QNet[behavior].QNet2.parameters(), QNet[behavior].QNet2Target.parameters()):
+                        targetParam.data.copy_(QNet[behavior].tau*param.data + (1 - QNet[behavior].tau)*targetParam.data)
+            
+            if i % 100 == 0:
+                # print(f"Step {i}, i % 100 = {i%100}, so we're here")
+                # print(f"Alpha: {alpha[behavior]:>8.2f}, Alpha loss: {alphaLoss:>8.2f}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
+                print(f"Alpha: {alpha[behavior]}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
+        # endOptimization = time.time()
+        # optimizationTime = endOptimization-startOptimization
+        # print(f"{1/optimizationTime:>4.1f} optimizations per second (QNETS: {1/qnetsOptimTime:>4.1f}, Actor: {1/actorOptimTime:>4.1f}, Entropy: {1/entropyOptimTime:>4.1f}), {1/inferenceTime:>4.1f} inferences per second")
+        # print(f"{1/optimizationTime:>4.1f} optimizations per second, {1/inferenceTime:>4.1f} inferences per second")
 
 for behavior in behaviorNames:
     for name, params in agents[behavior].named_parameters():
-        print(f"ENDING parameters {name}: {params}")
+        print(f"ENDING agent parameters {name}: {params}")
 #     for name, params in QNet[behavior].QNet1.named_parameters():
 #         print(f"ENDING QNET1 parameters {name}: {params}")
     

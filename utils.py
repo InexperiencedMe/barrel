@@ -114,7 +114,7 @@ class QNetwork(nn.Module):
         super(QNetwork, self).__init__()
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
-        self.obsChannels3D = self.obsSize3D[0] # first shape dim is channels
+        self.obsChannels3D = self.obsSize3D[-3] # first shape dim is channels
         self.continuousActionSize = self.envSpecs["ContinuousActions"]
         self.preCritic1DoutputSize = 0
         self.preCritic3DoutputSize = 0
@@ -125,31 +125,47 @@ class QNetwork(nn.Module):
 
         if self.using1Dobs:
             self.preCritic1DoutputSize = 64
-            self.preCritic1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 128), nn.Tanh(),
-                nn.Linear(128, self.preCritic1DoutputSize), nn.Tanh())
+            self.preCritic1D_1 = nn.Linear(self.obsSize1D, 128)
+            self.preCritic1D_2 = nn.Linear(128, 128)
+            self.preCritic1D_3 = nn.Linear(128, self.preCritic1DoutputSize)
+            # print(f"INITIAL WEIGHTS OF THE PRE CRITIC LAYER 1:\n{list(self.preCritic1D_1.parameters())}")
+            # self.preCritic1D = nn.Sequential(
+            #     nn.Linear(self.obsSize1D, 128), nn.ReLU(),
+            #     nn.Linear(128, self.preCritic1DoutputSize), nn.ReLU())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
-                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
-                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
-                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
+                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.ReLU(),
+                nn.Conv2d(16, 32, 5, stride=2), nn.ReLU(),
+                nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1), nn.Flatten())
+        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1))
+        # print(f"INITIAL WEIGHTS OF THE FINAL CRITIC:\n{list(self.criticFinal.parameters())}")
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
         standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
-        # print(f"Will try to cat standardObsFeatures of shape {standardObsFeatures.shape} and actionObsFeatures of shape: {actionObsFeatures.shape}")
         # print(f"Feeding critic with standards obs features of shape {standardObsFeatures.shape} and actionObsFeatures of shape {actionObsFeatures.shape} to get {torch.cat((standardObsFeatures, actionObsFeatures), -1).shape} total shape")
+        # print(f"!!!!!!! CRITIC\nGOT X: {x},\nobs1D: {obs1D},\nobs3D: {obs3D},\nstandardsObsFeatures: {standardObsFeatures},\nactionObsFeatures: {actionObsFeatures}")
+        # print(f"We get these preprocessed features concatenated with actions and feed it through criticFinal")
         return self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
         
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         netsOutputs = []
         if self.using1Dobs:
-            netsOutputs.append(self.preCritic1D(obs1D))
+            # netsOutputs.append(self.preCritic1D(obs1D))
+            # print(f"WEIGHTS OF THE PRE CRITIC LAYER 1:\n{list(self.preCritic1D_1.parameters())}")
+            # print(f"WEIGHTS OF THE FINAL CRITIC:\n{list(self.criticFinal.parameters())}")
+            # print(f"INPUT TO THE PRE CRITIC:\n{obs1D}")
+            x = F.relu(self.preCritic1D_1(obs1D))
+            # print(f"RELUED obs1D after layer 1:\n{x}")
+            x = F.relu(self.preCritic1D_2(x))
+            # print(f"RELUED obs1D after layer 2:\n{x}")
+            x = self.preCritic1D_3(x)
+            # print(f"UNRELUED obs1D after layer 3:\n{x}")
+            netsOutputs.append(x)
         if self.using3Dobs:
             netsOutputs.append(self.preCritic3D(obs3D))
         return torch.cat(netsOutputs, -1)
@@ -163,8 +179,7 @@ class QNetwork(nn.Module):
         if actionsContinuous != None:
             # print(f"actionsContinuous: {actionsContinuous}")
             # print(f"actionsContinuous.shape: {actionsContinuous.shape}")
-            featuresC = torch.tensor(actionsContinuous)
-            featuresList.append(featuresC)
+            featuresList.append(actionsContinuous)
 
         if actionsDiscrete != None:
             # print(f"actionsDiscrete: {actionsDiscrete}")
@@ -180,9 +195,8 @@ class QNetwork(nn.Module):
         return features
 
 
-class SoftQNetwork(nn.Module):
+class SoftQNetwork():
     def __init__(self, envSpecs):
-        super(SoftQNetwork, self).__init__()
         self.QNet1 = QNetwork(envSpecs).to(device)
         self.QNet2 = QNetwork(envSpecs).to(device)
         self.QNet1Target = QNetwork(envSpecs).to(device)
@@ -190,7 +204,7 @@ class SoftQNetwork(nn.Module):
         self.QNet1Target.load_state_dict(self.QNet1.state_dict())
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
-        self.QNetsOptimizer = optim.Adam(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
+        self.QNetsOptimizer = optim.AdamW(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
         self.tau = 0.005
 
 LOG_STD_MAX = 2
@@ -215,14 +229,14 @@ class SAC(nn.Module):
         if self.using1Dobs:      
             self.preActor1DoutputSize = 256
             self.preActor1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 256), nn.Tanh(),
-                nn.Linear(256, self.preActor1DoutputSize), nn.Tanh())
+                nn.Linear(self.obsSize1D, 256), nn.ReLU(),
+                nn.Linear(256, self.preActor1DoutputSize), nn.ReLU())
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
-                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
-                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
-                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
+                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.ReLU(),
+                nn.Conv2d(16, 32, 5, stride=2), nn.ReLU(),
+                nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
 
@@ -232,7 +246,7 @@ class SAC(nn.Module):
 
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.Tanh(),
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.ReLU(),
                 nn.Linear(128, self.continuousActionSize))        
             self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
             self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
@@ -241,11 +255,11 @@ class SAC(nn.Module):
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.ReLU(),
                 nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
-        self.actorOptimizer = optim.Adam(list(self.parameters()), lr=3e-4)
+        self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-3)
 
     # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
     # TODO: not handling action masks yet
