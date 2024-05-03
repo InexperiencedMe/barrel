@@ -101,8 +101,8 @@ def processObservations(x):
                     # print(f"Making it of shape: {list(obs3D.shape)}")
                 else:
                     print(f"Unexpected {len(list(observationElement.shape))}-dimensional observation")
-            allObs1D.append(obs1D.clone())
-            allObs3D.append(obs3D.clone())
+            allObs1D.append(obs1D)
+            allObs3D.append(obs3D)
         # TODO: Put it on device?
         # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
         # print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
@@ -125,13 +125,9 @@ class QNetwork(nn.Module):
 
         if self.using1Dobs:
             self.preCritic1DoutputSize = 64
-            self.preCritic1D_1 = nn.Linear(self.obsSize1D, 128)
-            self.preCritic1D_2 = nn.Linear(128, 128)
-            self.preCritic1D_3 = nn.Linear(128, self.preCritic1DoutputSize)
-            # print(f"INITIAL WEIGHTS OF THE PRE CRITIC LAYER 1:\n{list(self.preCritic1D_1.parameters())}")
-            # self.preCritic1D = nn.Sequential(
-            #     nn.Linear(self.obsSize1D, 128), nn.ReLU(),
-            #     nn.Linear(128, self.preCritic1DoutputSize), nn.ReLU())
+            self.preCritic1D = nn.Sequential(
+                nn.Linear(self.obsSize1D, 128), nn.ReLU(),
+                nn.Linear(128, self.preCritic1DoutputSize), nn.ReLU())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
@@ -155,17 +151,7 @@ class QNetwork(nn.Module):
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         netsOutputs = []
         if self.using1Dobs:
-            # netsOutputs.append(self.preCritic1D(obs1D))
-            # print(f"WEIGHTS OF THE PRE CRITIC LAYER 1:\n{list(self.preCritic1D_1.parameters())}")
-            # print(f"WEIGHTS OF THE FINAL CRITIC:\n{list(self.criticFinal.parameters())}")
-            # print(f"INPUT TO THE PRE CRITIC:\n{obs1D}")
-            x = F.relu(self.preCritic1D_1(obs1D))
-            # print(f"RELUED obs1D after layer 1:\n{x}")
-            x = F.relu(self.preCritic1D_2(x))
-            # print(f"RELUED obs1D after layer 2:\n{x}")
-            x = self.preCritic1D_3(x)
-            # print(f"UNRELUED obs1D after layer 3:\n{x}")
-            netsOutputs.append(x)
+            netsOutputs.append(self.preCritic1D(obs1D))
         if self.using3Dobs:
             netsOutputs.append(self.preCritic3D(obs3D))
         return torch.cat(netsOutputs, -1)
@@ -227,10 +213,10 @@ class SAC(nn.Module):
         assert self.using1Dobs or self.using3Dobs, "No 1D or 3D observations and you expect it to work?!?!?!?"
 
         if self.using1Dobs:      
-            self.preActor1DoutputSize = 256
+            self.preActor1DoutputSize = 128
             self.preActor1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 256), nn.ReLU(),
-                nn.Linear(256, self.preActor1DoutputSize), nn.ReLU())
+                nn.Linear(self.obsSize1D, 128), nn.ReLU(),
+                nn.Linear(128, self.preActor1DoutputSize), nn.ReLU())
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
@@ -259,7 +245,7 @@ class SAC(nn.Module):
                 nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
-        self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-3)
+        self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4)
 
     # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
     # TODO: not handling action masks yet
@@ -281,31 +267,31 @@ class SAC(nn.Module):
         #     print(f"Action: {action}. LogProb: {logprob.item():.3f}")        
         return action.T, logprobs.sum(0)
     
-    def getContinuousActionAndValue(self, x, evaluation=False):
+    def getContinuousActionAndValue(self, x, evaluation=False, withLogprobs=True):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         # print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
 
         actionMean = self.actorContinuous(observationFeatures)
-        actionLogStd = torch.tanh(self.actorLogStd(observationFeatures))
-        actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp / Denis Yarats
+        actionLogStd = self.actorLogStd(observationFeatures)
+        actionLogStd = torch.clamp(actionLogStd, LOG_STD_MIN, LOG_STD_MAX)
+        # actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp / Denis Yarats
         actionStd = actionLogStd.exp()
-        distribution = Normal(actionMean, actionStd)
 
+        distribution = Normal(actionMean, actionStd)
         if evaluation == True:
             actionSample = actionMean
         else:
             actionSample = distribution.rsample()
         
+        if withLogprobs:
+            logProbs = distribution.log_prob(actionSample).sum(-1)
+            logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1)
+        else:
+            logProbs = None
+        
         actionSampleTanh = torch.tanh(actionSample)
         action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
-        logProbs = distribution.log_prob(actionSample)
-        logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)
-        logProbs = logProbs.sum(-1)
-        
-        # for i in range(len(action)):
-        #     print(f"Action: {action[i]}. LogProb: {logProbs[i].item():.3f}")    
-
         return action, logProbs
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
