@@ -124,10 +124,10 @@ class QNetwork(nn.Module):
         self.usingContinuousActions = self.continuousActionSize > 0
 
         if self.using1Dobs:
-            self.preCritic1DoutputSize = 64
+            self.preCritic1DoutputSize = 128
             self.preCritic1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 128), nn.ReLU(),
-                nn.Linear(128, self.preCritic1DoutputSize), nn.ReLU())
+                nn.Linear(self.obsSize1D, 256), nn.ReLU(),
+                nn.Linear(256, self.preCritic1DoutputSize), nn.ReLU())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
@@ -194,7 +194,7 @@ class SoftQNetwork():
         self.tau = 0.005
 
 LOG_STD_MAX = 2
-LOG_STD_MIN = -5
+LOG_STD_MIN = -10
 
 class SAC(nn.Module):
     # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
@@ -274,8 +274,8 @@ class SAC(nn.Module):
 
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd(observationFeatures)
-        actionLogStd = torch.clamp(actionLogStd, LOG_STD_MIN, LOG_STD_MAX)
-        # actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp / Denis Yarats
+        # actionLogStd = torch.clamp(actionLogStd, LOG_STD_MIN, LOG_STD_MAX)
+        actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp. Keeps bounds transforming range -1:1 to min:max
         actionStd = actionLogStd.exp()
 
         distribution = Normal(actionMean, actionStd)
@@ -286,7 +286,7 @@ class SAC(nn.Module):
         
         if withLogprobs:
             logProbs = distribution.log_prob(actionSample).sum(-1)
-            logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1)
+            logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1) # correction for tanh squashing
         else:
             logProbs = None
         
