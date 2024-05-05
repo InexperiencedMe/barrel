@@ -136,7 +136,8 @@ class QNetwork(nn.Module):
                 nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1))
+        # self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1))
+        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 128), nn.ReLU(), nn.Linear(128, 1))
         # print(f"INITIAL WEIGHTS OF THE FINAL CRITIC:\n{list(self.criticFinal.parameters())}")
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
@@ -147,38 +148,62 @@ class QNetwork(nn.Module):
         # print(f"!!!!!!! CRITIC\nGOT X: {x},\nobs1D: {obs1D},\nobs3D: {obs3D},\nstandardsObsFeatures: {standardObsFeatures},\nactionObsFeatures: {actionObsFeatures}")
         # print(f"We get these preprocessed features concatenated with actions and feed it through criticFinal")
         return self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
+        # return self.criticFinal(standardObsFeatures)
         
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
-        netsOutputs = []
-        if self.using1Dobs:
-            netsOutputs.append(self.preCritic1D(obs1D))
-        if self.using3Dobs:
-            netsOutputs.append(self.preCritic3D(obs3D))
-        return torch.cat(netsOutputs, -1)
+        if self.using1Dobs and self.using3Dobs:
+            return torch.cat((self.preCritic1D(obs1D), self.preCritic3D(obs3D)), -1)
+        elif self.using1Dobs:
+            return self.preCritic1D(obs1D)
+        elif self.using3Dobs:
+            return self.preCritic3D(obs3D)
+        
+        # netsOutputs = []
+        # if self.using1Dobs:
+        #     netsOutputs.append(self.preCritic1D(obs1D))
+        # if self.using3Dobs:
+        #     netsOutputs.append(self.preCritic3D(obs3D))
+        # return torch.cat(netsOutputs, -1)
 
     def getTotalActionSize(self):
         return self.continuousActionSize + sum(self.envSpecs["DiscreteActions"])
     
     def getActionRepresentationForInput(self, actionsContinuous=None, actionsDiscrete=None):
-        featuresList = []
-        # print(f"func getActionRepresentationForInput, where C:{actionsContinuous}, D:{actionsDiscrete}")
+        continuousFeatures = torch.empty(0, device=device)
+        discreteFeatures = torch.empty(0, device=device)
+        
         if actionsContinuous != None:
-            # print(f"actionsContinuous: {actionsContinuous}")
-            # print(f"actionsContinuous.shape: {actionsContinuous.shape}")
-            featuresList.append(actionsContinuous)
-
+            continuousFeatures = torch.cat((continuousFeatures, actionsContinuous), -1)
         if actionsDiscrete != None:
-            # print(f"actionsDiscrete: {actionsDiscrete}")
-            onehots = []
-            for i, discreteSize in enumerate(self.envSpecs["DiscreteActions"]):
-                # print(f"i: {i}, analyzed discrete action size: {discreteSize}")
-                # print(f"onehotting actionsDiscrete {actionsDiscrete}")
-                onehots.append(F.one_hot(actionsDiscrete[:, i], discreteSize))
-            featuresList.append(torch.cat(onehots, -1))
+            discreteFeatures = torch.cat([F.onehot(actionsDiscrete[:, i], size) for i, size in enumerate(self.envSpecs["DiscreteActions"])], -1)
+
+        # ret = torch.cat((continuousFeatures, discreteFeatures))
+        # print(f"getActionRepresentationForInput returning {ret}")
+        # return ret
+        return torch.cat((continuousFeatures, discreteFeatures))
     
-        features = torch.cat(featuresList, -1)
-        # print(f"Final input respresentation (first 3):\n{features[:3]}")
-        return features
+        # featuresList = []
+        # # print(f"func getActionRepresentationForInput, where C:{actionsContinuous}, D:{actionsDiscrete}")
+        # if actionsContinuous != None:
+        #     # print(f"actionsContinuous: {actionsContinuous}")
+        #     # print(f"actionsContinuous.shape: {actionsContinuous.shape}")
+        #     featuresList.append(actionsContinuous)
+
+        # if actionsDiscrete != None:
+        #     # print(f"actionsDiscrete: {actionsDiscrete}")
+        #     onehots = []
+            
+        #     for i, discreteSize in enumerate(self.envSpecs["DiscreteActions"]):
+        #         # print(f"i: {i}, analyzed discrete action size: {discreteSize}")
+        #         # print(f"onehotting actionsDiscrete {actionsDiscrete}")
+        #         onehots.append(F.one_hot(actionsDiscrete[:, i], discreteSize))
+        #     featuresList.append(torch.cat(onehots, -1))
+    
+        # features = torch.cat(featuresList, -1)
+
+
+        # # print(f"Final input respresentation (first 3):\n{features[:3]}")
+        # return features
 
 
 class SoftQNetwork():
@@ -317,7 +342,10 @@ class Memory(object):
 
     def sample(self, batchSize):
         sampledEntries = random.sample(self.memory, batchSize)
-        return self.fieldNames(*zip(*sampledEntries))
+        # print(f"sampled entries from memory: {sampledEntries}")
+        a = self.fieldNames(*zip(*sampledEntries))
+        # print(f"Returning memories as {a}")
+        return a
 
     def __len__(self):
         return len(self.memory)
