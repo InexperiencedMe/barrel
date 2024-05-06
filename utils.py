@@ -86,10 +86,10 @@ def processObservations(x):
         # Only batched pass
         allObs1D, allObs3D = [], []
         for observation in x:
-            obs1D = torch.zeros((0,))
-            obs3D = torch.zeros((0,))
+            obs1D = torch.zeros((0,), dtype=torch.float32)
+            obs3D = torch.zeros((0,), dtype=torch.float32)
             for observationElement in observation:
-                observationElement = torch.from_numpy(observationElement)
+                observationElement = torch.from_numpy(observationElement.astype(np.float32))
                 # print(f"Observation of shape: {list(observationElement.shape)}")
                 if len(list(observationElement.shape)) == 1:
                     # print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs1D.shape)}")
@@ -215,7 +215,7 @@ class SoftQNetwork():
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
         self.QNetsOptimizer = optim.AdamW(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
-        self.tau = 0.02
+        self.tau = 0.005
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -10
@@ -292,16 +292,19 @@ class SAC(nn.Module):
         return action.T, logprobs.sum(0)
     
     def getContinuousActionAndValue(self, x, evaluation=False, withLogprobs=True):
+        print(f"\nx:\n{x}")
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         # print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
-
+        print(f"\nobs1D:\n{obs1D}")
+        print(f"\nobs3D:\n{obs3D}")
+        print(f"\nObs features:\n{observationFeatures}")
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd(observationFeatures)
         # actionLogStd = torch.clamp(actionLogStd, LOG_STD_MIN, LOG_STD_MAX)
         actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp. Keeps bounds transforming range -1:1 to min:max
         actionStd = actionLogStd.exp()
-
+        print(f"actionMean:\n{actionMean},\nactionLogStd:\n{actionLogStd},\nactionStd:\n{actionStd},\n")
         distribution = Normal(actionMean, actionStd)
         if evaluation == True:
             actionSample = actionMean
@@ -313,8 +316,14 @@ class SAC(nn.Module):
         
         if withLogprobs:
             logProbs = distribution.log_prob(actionSample)
+            # print(f"logProbs shape {logProbs.shape}, torch.log shape {torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6).shape}")
+            # print(f"cAS shape {self.continuousActionScale.shape}, aST shape {actionSampleTanh.shape}, aST 1-pow shape: {(1 - actionSampleTanh.pow(2)).shape}")
+            logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)#.sum(-1, keepdim=True) # CleanRL version
+            # print(f"Jacobian after log shape: {jacobian.shape}")
+            # logProbs -= jacobian
+            logProbs = logProbs.sum(-1).view(-1)
+
             # logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1) # correction for tanh squashing
-            logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6).sum(-1) # CleanRL version
         else:
             logProbs = None
         
@@ -322,10 +331,16 @@ class SAC(nn.Module):
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
+            print(f"\nBranchie both 1D and 3D\n")
             return torch.cat((self.preActor1D(obs1D), self.preActor3D(obs3D)), -1)
         elif self.using1Dobs:
-            return self.preActor1D(obs1D)
+            print(f"\nBranchie only 1D\n")
+            output = self.preActor1D(obs1D)
+            print(f"Feeding obs1D {obs1D} of type {type(obs1D)} and dtype {obs1D.dtype} and shape {obs1D.shape} to preActor and getting {output}")
+            print(f"Weights of preActor1D: {list(self.preActor1D.parameters())}")
+            return output
         elif self.using3Dobs:
+            print(f"\nBranchie only 3D\n")
             return self.preActor3D(obs3D)
         
         # # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
