@@ -205,7 +205,6 @@ class QNetwork(nn.Module):
         # # print(f"Final input respresentation (first 3):\n{features[:3]}")
         # return features
 
-
 class SoftQNetwork():
     def __init__(self, envSpecs):
         self.QNet1 = QNetwork(envSpecs).to(device)
@@ -216,7 +215,7 @@ class SoftQNetwork():
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
         self.QNetsOptimizer = optim.AdamW(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
-        self.tau = 0.005
+        self.tau = 0.02
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -10
@@ -308,28 +307,38 @@ class SAC(nn.Module):
             actionSample = actionMean
         else:
             actionSample = distribution.rsample()
+
+        actionSampleTanh = torch.tanh(actionSample)
+        action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
         
         if withLogprobs:
-            logProbs = distribution.log_prob(actionSample).sum(-1)
-            logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1) # correction for tanh squashing
+            logProbs = distribution.log_prob(actionSample)
+            # logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1) # correction for tanh squashing
+            logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6).sum(-1) # CleanRL version
         else:
             logProbs = None
         
-        actionSampleTanh = torch.tanh(actionSample)
-        action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
         return action, logProbs
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
-        # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
-        netsOutputs = []
-        if self.using1Dobs:
-            # print(f"Trying to feed preActor1D an input of shape {list(obs1D.shape)} while obsSize1D is {self.obsSize1D}")
-            netsOutputs.append(self.preActor1D(obs1D))
-            # print(f"Appending to outputs preActor1D outputs of shape {self.preActor1D(obs1D).shape}")
-        if self.using3Dobs:
-            netsOutputs.append(self.preActor3D(obs3D))
-            # print(f"Appending to outputs preActor3D outputs of shape {self.preActor3D(obs3D).shape}")
-        return torch.cat(netsOutputs, -1)
+        if self.using1Dobs and self.using3Dobs:
+            return torch.cat((self.preActor1D(obs1D), self.preActor3D(obs3D)), -1)
+        elif self.using1Dobs:
+            return self.preActor1D(obs1D)
+        elif self.using3Dobs:
+            return self.preActor3D(obs3D)
+        
+        # # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
+        # netsOutputs = []
+        # if self.using1Dobs:
+        #     # print(f"Trying to feed preActor1D an input of shape {list(obs1D.shape)} while obsSize1D is {self.obsSize1D}")
+        #     netsOutputs.append(self.preActor1D(obs1D))
+        #     # print(f"Appending to outputs preActor1D outputs of shape {self.preActor1D(obs1D).shape}")
+        # if self.using3Dobs:
+        #     netsOutputs.append(self.preActor3D(obs3D))
+        #     # print(f"Appending to outputs preActor3D outputs of shape {self.preActor3D(obs3D).shape}")
+        # return torch.cat(netsOutputs, -1)
+    
     
 class Memory(object):
     def __init__(self, capacity, fieldNames=["observations", "actionsContinuous", "actionsDiscrete", "rewards", "dones", "nextObservations"]):
