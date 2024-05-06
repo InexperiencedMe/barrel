@@ -82,32 +82,58 @@ def getObsSizes(specs):
     return obsSize1D, osbSize3D
 
 def processObservations(x):
-        # TODO Getting a warning with this approach.. Could rework
-        # Only batched pass
-        allObs1D, allObs3D = [], []
-        for observation in x:
-            obs1D = torch.zeros((0,), dtype=torch.float32)
-            obs3D = torch.zeros((0,), dtype=torch.float32)
-            for observationElement in observation:
-                observationElement = torch.from_numpy(observationElement.astype(np.float32))
-                # print(f"Observation of shape: {list(observationElement.shape)}")
-                if len(list(observationElement.shape)) == 1:
-                    # print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs1D.shape)}")
-                    obs1D = torch.cat((obs1D, observationElement))
-                    # print(f"Making it of shape: {list(obs1D.shape)}")
-                elif len(list(observationElement.shape)) == 3:
-                    # print(f"BATCHED So, dimensionality is 3 and we add it to obs1D of shape: {list(obs3D.shape)}")
-                    obs3D = torch.cat((obs3D, observationElement))
-                    # print(f"Making it of shape: {list(obs3D.shape)}")
-                else:
-                    print(f"Unexpected {len(list(observationElement.shape))}-dimensional observation")
-            allObs1D.append(obs1D)
-            allObs3D.append(obs3D)
-        # TODO: Put it on device?
-        # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
-        # print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
-        # print(f"Outputting stacked allObs1D and allObs3D of shapes: {torch.stack(allObs1D).shape}, {torch.stack(allObs3D).shape}")
-        return torch.stack(allObs1D).to(device), torch.stack(allObs3D).to(device)
+    # Convert numpy arrays to torch tensors and group by dimensionality
+    allObs1D = []
+    allObs3D = []
+
+    for observation in x:
+        obs1D = []
+        obs3D = []
+
+        for observationElement in observation:
+            observationElement = torch.from_numpy(observationElement.astype(np.float32))
+            
+            if observationElement.ndim == 1:
+                obs1D.append(observationElement)
+            elif observationElement.ndim == 3:
+                obs3D.append(observationElement)
+            else:
+                print(f"Unexpected {observationElement.ndim}-dimensional observation")
+        
+        if obs1D:
+            allObs1D.append(torch.cat(obs1D))
+        if obs3D:
+            allObs3D.append(torch.cat(obs3D))  # Assuming concatenation along a suitable axis
+
+    final1D = torch.stack(allObs1D).to(device) if allObs1D else torch.empty(0, device=device)
+    final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, device=device)
+    return final1D, final3D
+
+    # TODO Getting a warning with this approach.. Could rework
+    # Only batched pass
+    allObs1D, allObs3D = [], []
+    for observation in x:
+        obs1D = torch.zeros((0,), dtype=torch.float32)
+        obs3D = torch.zeros((0,), dtype=torch.float32)
+        for observationElement in observation:
+            observationElement = torch.from_numpy(observationElement.astype(np.float32))
+            # print(f"Observation of shape: {list(observationElement.shape)}")
+            if len(list(observationElement.shape)) == 1:
+                # print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs1D.shape)}")
+                obs1D = torch.cat((obs1D, observationElement))
+                # print(f"Making it of shape: {list(obs1D.shape)}")
+            elif len(list(observationElement.shape)) == 3:
+                # print(f"BATCHED So, dimensionality is 3 and we add it to obs1D of shape: {list(obs3D.shape)}")
+                obs3D = torch.cat((obs3D, observationElement))
+                # print(f"Making it of shape: {list(obs3D.shape)}")
+            else:
+                print(f"Unexpected {len(list(observationElement.shape))}-dimensional observation")
+        allObs1D.append(obs1D)
+        allObs3D.append(obs3D)
+    # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
+    # print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
+    # print(f"Outputting stacked allObs1D and allObs3D of shapes: {torch.stack(allObs1D).shape}, {torch.stack(allObs3D).shape}")
+    return torch.stack(allObs1D).to(device), torch.stack(allObs3D).to(device)
 
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
@@ -292,19 +318,19 @@ class SAC(nn.Module):
         return action.T, logprobs.sum(0)
     
     def getContinuousActionAndValue(self, x, evaluation=False, withLogprobs=True):
-        print(f"\nx:\n{x}")
+        # print(f"\nx:\n{x}")
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         # print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
-        print(f"\nobs1D:\n{obs1D}")
-        print(f"\nobs3D:\n{obs3D}")
-        print(f"\nObs features:\n{observationFeatures}")
+        # print(f"\nobs1D:\n{obs1D}")
+        # print(f"\nobs3D:\n{obs3D}")
+        # print(f"\nObs features:\n{observationFeatures}")
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd(observationFeatures)
         # actionLogStd = torch.clamp(actionLogStd, LOG_STD_MIN, LOG_STD_MAX)
         actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp. Keeps bounds transforming range -1:1 to min:max
         actionStd = actionLogStd.exp()
-        print(f"actionMean:\n{actionMean},\nactionLogStd:\n{actionLogStd},\nactionStd:\n{actionStd},\n")
+        # print(f"actionMean:\n{actionMean},\nactionLogStd:\n{actionLogStd},\nactionStd:\n{actionStd},\n")
         distribution = Normal(actionMean, actionStd)
         if evaluation == True:
             actionSample = actionMean
@@ -331,16 +357,18 @@ class SAC(nn.Module):
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
-            print(f"\nBranchie both 1D and 3D\n")
+            # print(f"\nBranchie both 1D and 3D\n")
             return torch.cat((self.preActor1D(obs1D), self.preActor3D(obs3D)), -1)
         elif self.using1Dobs:
-            print(f"\nBranchie only 1D\n")
+            # print(f"\nBranchie only 1D\n")
             output = self.preActor1D(obs1D)
-            print(f"Feeding obs1D {obs1D} of type {type(obs1D)} and dtype {obs1D.dtype} and shape {obs1D.shape} to preActor and getting {output}")
-            print(f"Weights of preActor1D: {list(self.preActor1D.parameters())}")
+            # print(f"Feeding obs1D {obs1D} of type {type(obs1D)} and dtype {obs1D.dtype} and shape {obs1D.shape} to preActor and getting {output}")
+            # print(f"Weights of preActor1D: {list(self.preActor1D.parameters())}")
+            # print(f"Min of obs: {torch.min(obs1D)}")
+            # print(f"Max of obs: {torch.max(obs1D)}")
             return output
         elif self.using3Dobs:
-            print(f"\nBranchie only 3D\n")
+            # print(f"\nBranchie only 3D\n")
             return self.preActor3D(obs3D)
         
         # # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
