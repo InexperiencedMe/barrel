@@ -64,7 +64,7 @@ alphaLosses = []
 alphas = []
 QEvaluations = []
 logProbs = []
-totalSteps = 30000
+totalSteps = 20000
 for i in range(1, totalSteps+1):
     # startInference = time.time()
     for behavior in behaviorNames:
@@ -186,11 +186,11 @@ for i in range(1, totalSteps+1):
                     
                     if agents[behavior].usingContinuousActions:
                         stateActionsContinuous, stateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.observations)
-                        stateActionsContinuous = stateActionsContinuous.detach()
+                        # stateActionsContinuous = stateActionsContinuous.detach()
                         divider += 1
                     if agents[behavior].usingDiscreteActions:
                         stateActionsDiscrete, stateLogProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.observations)
-                        stateActionsDiscrete = stateActionsDiscrete.detach()
+                        # stateActionsDiscrete = stateActionsDiscrete.detach()
                         divider += 1
 
                     QFunction1Evaluation = QNet[behavior].QNet1(mem.observations, stateActionsContinuous, stateActionsDiscrete)
@@ -243,7 +243,7 @@ for i in range(1, totalSteps+1):
             if i % 1 == 0:
                 qnetsLosses.append(QFunctionsTotalLoss)
                 actorLosses.append(actorLoss)
-                # alphaLosses.append(alphaLoss)
+                alphaLosses.append(alphaLoss)
                 alphas.append(alpha[behavior])
                 QEvaluations.append(minQEvaluation.view(-1).mean())
                 logProbs.append(((stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean(-1))
