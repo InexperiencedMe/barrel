@@ -34,3 +34,13 @@ class actor(nn.Module):
 
 Analyze this:
 https://github.com/nisheeth-golakiya/hybrid-sac/blob/main/hybrid_sac_platform.py
+
+
+-----
+
+Further steps:
+1. Beat more envs. Discrete actions for sure and visual obs and hybrid actions. Why did loss explode on pushblock? Why does it get stuck?
+2. When everything works, full refactor. separate file for actors and critics. Self contained optimziation. In main I should have just optimize calls, no details no bs
+3. Full ONNX export for saving and processing. And checkpoints with resuming training
+4. Speed it up. Max out the flops potential
+5. Develop more algorithms 
