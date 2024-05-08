@@ -10,6 +10,8 @@ from collections import deque, namedtuple
 import random
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
+
 class UnityInterface():
     def __init__(self, envName=None):
         self.env = UnityEnvironment(file_name=envName)
@@ -86,7 +88,7 @@ def processObservations(x):
     for observation in x:
         obs1D, obs3D = [], []
         for observationElement in observation:
-            observationElement = torch.from_numpy(observationElement.astype(np.float32))
+            observationElement = torch.tensor(observationElement)
             if observationElement.ndim == 1:
                 obs1D.append(observationElement)
             elif observationElement.ndim == 3:
@@ -101,30 +103,6 @@ def processObservations(x):
     final1D = torch.stack(allObs1D).to(device) if allObs1D else torch.empty(0, device=device)
     final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, device=device)
     return final1D, final3D
-
-    # allObs1D, allObs3D = [], []
-    # for observation in x:
-    #     obs1D = torch.zeros((0,), dtype=torch.float32)
-    #     obs3D = torch.zeros((0,), dtype=torch.float32)
-    #     for observationElement in observation:
-    #         observationElement = torch.from_numpy(observationElement.astype(np.float32))
-    #         # print(f"Observation of shape: {list(observationElement.shape)}")
-    #         if len(list(observationElement.shape)) == 1:
-    #             # print(f"BATCHED So, dimensionality is 1 and we add it to obs1D of shape: {list(obs1D.shape)}")
-    #             obs1D = torch.cat((obs1D, observationElement))
-    #             # print(f"Making it of shape: {list(obs1D.shape)}")
-    #         elif len(list(observationElement.shape)) == 3:
-    #             # print(f"BATCHED So, dimensionality is 3 and we add it to obs1D of shape: {list(obs3D.shape)}")
-    #             obs3D = torch.cat((obs3D, observationElement))
-    #             # print(f"Making it of shape: {list(obs3D.shape)}")
-    #         else:
-    #             print(f"Unexpected {len(list(observationElement.shape))}-dimensional observation")
-    #     allObs1D.append(obs1D)
-    #     allObs3D.append(obs3D)
-    # # print(f"processObservations returning obs1D of shape {list(obs1D.shape)} abd obs3D of shape {list(obs3D.shape)}")
-    # # print(f"Will be stacking lists allObs1D and allObs3D: {allObs1D}, {allObs3D}")
-    # # print(f"Outputting stacked allObs1D and allObs3D of shapes: {torch.stack(allObs1D).shape}, {torch.stack(allObs3D).shape}")
-    # return torch.stack(allObs1D).to(device), torch.stack(allObs3D).to(device)
 
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
@@ -153,19 +131,13 @@ class QNetwork(nn.Module):
                 nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
             self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        # self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 1))
         self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 128), nn.ReLU(), nn.Linear(128, 1))
-        # print(f"INITIAL WEIGHTS OF THE FINAL CRITIC:\n{list(self.criticFinal.parameters())}")
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
         standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
-        # print(f"Feeding critic with standards obs features of shape {standardObsFeatures.shape} and actionObsFeatures of shape {actionObsFeatures.shape} to get {torch.cat((standardObsFeatures, actionObsFeatures), -1).shape} total shape")
-        # print(f"!!!!!!! CRITIC\nGOT X: {x},\nobs1D: {obs1D},\nobs3D: {obs3D},\nstandardsObsFeatures: {standardObsFeatures},\nactionObsFeatures: {actionObsFeatures}")
-        # print(f"We get these preprocessed features concatenated with actions and feed it through criticFinal")
         return self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
-        # return self.criticFinal(standardObsFeatures)
         
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
@@ -192,35 +164,9 @@ class QNetwork(nn.Module):
         if actionsContinuous != None:
             continuousFeatures = torch.cat((continuousFeatures, actionsContinuous), -1)
         if actionsDiscrete != None:
-            discreteFeatures = torch.cat([F.onehot(actionsDiscrete[:, i], size) for i, size in enumerate(self.envSpecs["DiscreteActions"])], -1)
+            discreteFeatures = torch.cat([F.one_hot(actionsDiscrete[:, i], size) for i, size in enumerate(self.envSpecs["DiscreteActions"])], -1)
 
-        # ret = torch.cat((continuousFeatures, discreteFeatures))
-        # print(f"getActionRepresentationForInput returning {ret}")
-        # return ret
         return torch.cat((continuousFeatures, discreteFeatures))
-    
-        # featuresList = []
-        # # print(f"func getActionRepresentationForInput, where C:{actionsContinuous}, D:{actionsDiscrete}")
-        # if actionsContinuous != None:
-        #     # print(f"actionsContinuous: {actionsContinuous}")
-        #     # print(f"actionsContinuous.shape: {actionsContinuous.shape}")
-        #     featuresList.append(actionsContinuous)
-
-        # if actionsDiscrete != None:
-        #     # print(f"actionsDiscrete: {actionsDiscrete}")
-        #     onehots = []
-            
-        #     for i, discreteSize in enumerate(self.envSpecs["DiscreteActions"]):
-        #         # print(f"i: {i}, analyzed discrete action size: {discreteSize}")
-        #         # print(f"onehotting actionsDiscrete {actionsDiscrete}")
-        #         onehots.append(F.one_hot(actionsDiscrete[:, i], discreteSize))
-        #     featuresList.append(torch.cat(onehots, -1))
-    
-        # features = torch.cat(featuresList, -1)
-
-
-        # # print(f"Final input respresentation (first 3):\n{features[:3]}")
-        # return features
 
 class SoftQNetwork():
     def __init__(self, envSpecs):
@@ -288,7 +234,14 @@ class SAC(nn.Module):
         
         self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4)
 
-    # TODO: I'd like to break it down so it doesnt calculate logprobs when I need only actions
+    def forward(self, x):
+        obs1D, obs3D = processObservations(x)
+        observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+        actionSample = self.actorContinuous(observationFeatures)
+        actionSampleTanh = torch.tanh(actionSample)
+        action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
+        return action
+
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
     def getDiscreteActionAndValue(self, x, action=None):
@@ -299,29 +252,16 @@ class SAC(nn.Module):
         multi_categoricals = [Categorical(logits=logits) for logits in split_logits]
         if action is None:
             action = torch.stack([categorical.sample() for categorical in multi_categoricals])
-        logprobs = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)])
-        # probs = torch.stack([torch.exp(categorical.log_prob(a)) for a, categorical in zip(action, multi_categoricals)])
-        # entropies = torch.stack([categorical.entropy() for categorical in multi_categoricals])
-        # print(f"Discrete logprobs are {logprobs} oftorch.min(QFunction1NextTarget, QFunction2NextTarget) shape {logprobs.shape} and we will sum them along 0: {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
-        # print(f"Logprobs: {logprobs} of shape {logprobs.shape} and we sum(0) it to shape {logprobs.sum(0).shape}")
-        # for action, logprob in zip(action.T, logprob.sum(0)):
-        #     print(f"Action: {action}. LogProb: {logprob.item():.3f}")        
+        logprobs = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)])     
         return action.T, logprobs.sum(0)
-    
+        
     def getContinuousActionAndValue(self, x, evaluation=False, withLogprobs=True):
-        # print(f"\nx:\n{x}")
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-        # print(f"Trying to pass to actorContinuous {self.actorContinuous} features of shape {observationFeatures.shape}")
-        # print(f"\nobs1D:\n{obs1D}")
-        # print(f"\nobs3D:\n{obs3D}")
-        # print(f"\nObs features:\n{observationFeatures}")
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd(observationFeatures)
-        # actionLogStd = torch.clamp(actionLogStd, LOG_STD_MIN, LOG_STD_MAX)
         actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp. Keeps bounds transforming range -1:1 to min:max
         actionStd = actionLogStd.exp()
-        # print(f"actionMean:\n{actionMean},\nactionLogStd:\n{actionLogStd},\nactionStd:\n{actionStd},\n")
         distribution = Normal(actionMean, actionStd)
         if evaluation == True:
             actionSample = actionMean
@@ -333,45 +273,20 @@ class SAC(nn.Module):
         
         if withLogprobs:
             logProbs = distribution.log_prob(actionSample)
-            # print(f"logProbs shape {logProbs.shape}, torch.log shape {torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6).shape}")
-            # print(f"cAS shape {self.continuousActionScale.shape}, aST shape {actionSampleTanh.shape}, aST 1-pow shape: {(1 - actionSampleTanh.pow(2)).shape}")
             logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)#.sum(-1, keepdim=True) # CleanRL version
-            # print(f"Jacobian after log shape: {jacobian.shape}")
-            # logProbs -= jacobian
             logProbs = logProbs.sum(-1).view(-1)
-
-            # logProbs -= (2*(np.log(2) - actionSample - F.softplus(-2*actionSample))).sum(-1) # correction for tanh squashing
         else:
             logProbs = None
-        
         return action, logProbs
 
     def getObservationFeaturesForActor(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
-            # print(f"\nBranchie both 1D and 3D\n")
             return torch.cat((self.preActor1D(obs1D), self.preActor3D(obs3D)), -1)
         elif self.using1Dobs:
-            # print(f"\nBranchie only 1D\n")
             output = self.preActor1D(obs1D)
-            # print(f"Feeding obs1D {obs1D} of type {type(obs1D)} and dtype {obs1D.dtype} and shape {obs1D.shape} to preActor and getting {output}")
-            # print(f"Weights of preActor1D: {list(self.preActor1D.parameters())}")
-            # print(f"Min of obs: {torch.min(obs1D)}")
-            # print(f"Max of obs: {torch.max(obs1D)}")
             return output
         elif self.using3Dobs:
-            # print(f"\nBranchie only 3D\n")
             return self.preActor3D(obs3D)
-        
-        # # print(f"Getting obsFeatues for actor with obs1D of shape {obs1D.shape} and obs3D of shape {obs3D.shape}")
-        # netsOutputs = []
-        # if self.using1Dobs:
-        #     # print(f"Trying to feed preActor1D an input of shape {list(obs1D.shape)} while obsSize1D is {self.obsSize1D}")
-        #     netsOutputs.append(self.preActor1D(obs1D))
-        #     # print(f"Appending to outputs preActor1D outputs of shape {self.preActor1D(obs1D).shape}")
-        # if self.using3Dobs:
-        #     netsOutputs.append(self.preActor3D(obs3D))
-        #     # print(f"Appending to outputs preActor3D outputs of shape {self.preActor3D(obs3D).shape}")
-        # return torch.cat(netsOutputs, -1)
     
     
 class Memory(object):
@@ -380,14 +295,11 @@ class Memory(object):
         self.memory = deque(maxlen=capacity)
 
     def push(self, observation, actionContinuous, actionDiscrete, reward, done, nextObservation):
-        # print(f"Appending a memory: { self.fieldNames(observation, actionContinuous, actionDiscrete, reward, done, nextObservation)}")
         self.memory.append(self.fieldNames(observation, actionContinuous, actionDiscrete, reward, done, nextObservation))
 
     def sample(self, batchSize):
         sampledEntries = random.sample(self.memory, batchSize)
-        # print(f"sampled entries from memory: {sampledEntries}")
         a = self.fieldNames(*zip(*sampledEntries))
-        # print(f"Returning memories as {a}")
         return a
 
     def __len__(self):

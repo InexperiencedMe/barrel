@@ -7,9 +7,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_printoptions(linewidth=100, precision=4, sci_mode=False)
 np.set_printoptions(linewidth=100, precision=4, suppress=True)
 
-env = UnityInterface("Builds\\Ball3D\\UnityEnvironment")
+# env = UnityInterface("Builds\\Ball3D\\UnityEnvironment")
 # env = UnityInterface("Builds\\Crawler\\UnityEnvironment")
-# env = UnityInterface(None)
+env = UnityInterface(None)
+
+
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
@@ -69,18 +71,15 @@ for i in range(1, totalSteps+1):
     # startInference = time.time()
     for behavior in behaviorNames:
         decisionSteps, terminalSteps = env.getSteps(behavior)
-        # print(f"For behavior {behavior} in step {i}/{totalSteps} we have decisionSteps agents {list(decisionSteps)} and terminal steps {list(terminalSteps)}")
         observationsThatNeedAction = []
         for agent in decisionSteps:
 
             observation = decisionSteps[agent].obs
             observationsThatNeedAction.append(observation)
             reward = decisionSteps[agent].reward
-            # print(f"agent {agent}, observationBuffer: {observationBuffer} of len {len(observation)}")
             lastObservation = observationBuffer[agent]
             lastActionContinuous = actionsBuffer[agent]['continuous']
             lastActionDiscrete = actionsBuffer[agent]['discrete']
-            # print(f"\n\nDECISION step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nLastActionC: {lastActionContinuous},\nCurrentReward:{reward}\n")
             if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
                 memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
             observationBuffer[agent] = observation
@@ -92,7 +91,6 @@ for i in range(1, totalSteps+1):
             lastObservation = observationBuffer[agent]
             lastActionContinuous = actionsBuffer[agent]['continuous']
             lastActionDiscrete = actionsBuffer[agent]['discrete']
-            # print(f"TERMINAL step {i}: For agent {agent}:\nLastObs: {lastObservation},\nCurrentObs: {observation},\nCurrentReward:{reward}\n")
             # Technically could skip the action None check. If lastObs exist, action does too
             if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
                 memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
@@ -101,8 +99,8 @@ for i in range(1, totalSteps+1):
                 actionsBuffer[agent]['discrete'] = None
                 # Save rewards only if we made an action before, otherwise the initial state was terminated state
                 rewards[agent] += reward
-                # if rewards[agent] > 4:
-                #     print(f"Final reward: {rewards[agent]:>.2f}")
+                if rewards[agent] > 4:
+                    print(f"Final reward: {rewards[agent]:>.2f}")
             finalRewards.append(rewards[agent])
             rewards[agent] = 0
 
@@ -127,13 +125,6 @@ for i in range(1, totalSteps+1):
                     actionsBuffer[agent]['continuous'] =  behaviorActionsForThisStep['continuous'][j]
                 if nrOfDiscreteActions > 0:
                     actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
-                
-            # obsShapes = []
-            # obsDimensionalites = []
-            # for element in observationsThatNeedAction[0]:
-            #     obsShapes.append(element.shape)
-            #     obsDimensionalites.append(len(element.shape))
-            # print(f"Observation of shapes {obsShapes}, thus, dimensions {obsDimensionalites}\n")
 
         # print(f"Setting Continuous actions: {behaviorActionsForThisStep['continuous']}, Discrete actions: {behaviorActionsForThisStep['discrete']}")
         env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'].detach().cpu().numpy())
@@ -143,10 +134,8 @@ for i in range(1, totalSteps+1):
 
     # startOptimization = time.time()
     for behavior in behaviorNames:
-        # print(f"memory length for behavior {behavior}: {len(memory[behavior])}")
         if len(memory[behavior]) > batchSize:
             mem = memory[behavior].sample(batchSize)
-            # Critic update
             # print(f"Sampled experiences:{mem}")
             # startQnetsOptim = time.time()
             with torch.no_grad():
@@ -186,28 +175,21 @@ for i in range(1, totalSteps+1):
                     
                     if agents[behavior].usingContinuousActions:
                         stateActionsContinuous, stateLogProbsContinuous = agents[behavior].getContinuousActionAndValue(mem.observations)
-                        # stateActionsContinuous = stateActionsContinuous.detach()
                         divider += 1
                     if agents[behavior].usingDiscreteActions:
                         stateActionsDiscrete, stateLogProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.observations)
-                        # stateActionsDiscrete = stateActionsDiscrete.detach()
                         divider += 1
 
                     QFunction1Evaluation = QNet[behavior].QNet1(mem.observations, stateActionsContinuous, stateActionsDiscrete)
                     QFunction2Evaluation = QNet[behavior].QNet2(mem.observations, stateActionsContinuous, stateActionsDiscrete)
 
                     minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-                    # print(f"minQeval of shape: {minQEvaluation.shape}: {minQEvaluation}")
-                    # print(f"Actor loss: entropy - currentevaluation: {(alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider)} - {minQEvaluation} and we mean it into {((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation).mean()}")
                     actorLoss = ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation).mean()
-
-                    
 
                     agents[behavior].actorOptimizer.zero_grad()
                     actorLoss.backward()
                     agents[behavior].actorOptimizer.step()
                     
-            # update the target network
             if i % qnetsUpdateFrequency == 0:
                 for _ in range(qnetsUpdateFrequency):
                     for param, targetParam in zip(QNet[behavior].QNet1.parameters(), QNet[behavior].QNet1Target.parameters()):
@@ -235,9 +217,7 @@ for i in range(1, totalSteps+1):
                     alphaOptimizer[behavior].step()
                     alpha[behavior] = logAlpha[behavior].exp().item()
 
-            if i % 1000 == 0:
-                # print(f"Step {i}, i % 100 = {i%100}, so we're here")
-                # print(f"Step {i}, Alpha: {alpha[behavior]:>4.2f}, Alpha Loss: {alphaLoss:>6.2f} Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
+            if i % 500 == 0:
                 print(f"Step {i}, Actor loss: {actorLoss:>8.2f}, QF loss: {QFunctionsTotalLoss:>8.2f}")
 
             if i % 1 == 0:
@@ -252,12 +232,5 @@ for i in range(1, totalSteps+1):
         # optimizationTime = endOptimization-startOptimization
         # print(f"{1/(optimizationTime+0.00001):>4.1f} optimizations per second")
         # print(f"{1/optimizationTime:>4.1f} optimizations per second, {1/inferenceTime:>4.1f} inferences per second")
-
-for behavior in behaviorNames:
-    for name, params in agents[behavior].named_parameters():
-        print(f"ENDING agent parameters {name}: {params}")
-#     for name, params in QNet[behavior].QNet1.named_parameters():
-#         print(f"ENDING QNET1 parameters {name}: {params}")
-    
 
 env.close()
