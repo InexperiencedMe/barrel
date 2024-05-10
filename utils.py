@@ -278,18 +278,37 @@ class SAC(nn.Module):
 
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
+    # NOTE: For now we never have a specific action. Its used in PPO, but SAC?
     def getDiscreteActionAndValue(self, x, action=None):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-        logits = self.actorDiscrete(observationFeatures)
-        split_logits = torch.split(logits, list(self.envSpecs["DiscreteActions"]), dim=-1)
-        multi_categoricals = [Categorical(logits=logits) for logits in split_logits]
+        unsplitLogits = self.actorDiscrete(observationFeatures)
+        # print(f"Unsplit Logits shape: {unsplitLogits.shape}")
+        splitLogits = torch.split(unsplitLogits, list(self.envSpecs["DiscreteActions"]), dim=-1)
+        actionDistributions = [Categorical(logits=logits) for logits in splitLogits]
         if action is None:
-            action = torch.stack([categorical.sample() for categorical in multi_categoricals])
-        logprobs = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)]).sum(0)  
-        probs = logprobs.exp()
-        # print(f"For Discrete Actions of size {list(self.envSpecs['DiscreteActions'])} we return batch logprobs {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
-        return action.T, logprobs, probs
+            action = torch.stack([distribution.sample() for distribution in actionDistributions])
+        # print(f"SplitLogits: {splitLogits} of shape\n")
+        # print(f"Actions: {action}")
+        # print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
+        logprobs = torch.stack([distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)])
+        probs = torch.stack([distribution.log_prob(a).exp() for a, distribution in zip(action, actionDistributions)])
+        print(f"action of shape {action.shape},\nprobs of shape {probs.shape},\nlogprobs of shape {logprobs.shape}\n")
+        print(f"BUT RETURNING action of shape {action.T.shape},\nprobs of shape {logprobs.T.sum(-1).shape},\nlogprobs of shape {probs.T.prod(-1).shape}\n\n")
+        # logprobs = logprobs.sum()BUT
+        return action.T, logprobs.T.sum(-1), probs.T.prod(-1)
+    
+        # obs1D, obs3D = processObservations(x)
+        # observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+        # logits = self.actorDiscrete(observationFeatures)
+        # split_logits = torch.split(logits, list(self.envSpecs["DiscreteActions"]), dim=-1)
+        # actionDistributions = [Categorical(logits=logits) for logits in split_logits]
+        # if action is None:
+        #     action = torch.stack([distribution.sample() for distribution in actionDistributions])
+        # logprobs = torch.stack([distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]).sum(0)  
+        # probs = logprobs.exp()
+        # # print(f"For Discrete Actions of size {list(self.envSpecs['DiscreteActions'])} we return batch logprobs {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
+        # return action.T, logprobs, probs
         
     def getContinuousActionAndValue(self, x, evaluation=False, withLogprobs=True):
         obs1D, obs3D = processObservations(x)
