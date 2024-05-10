@@ -103,8 +103,8 @@ def processObservations(x):
         if obs3D:
             allObs3D.append(torch.cat(obs3D))  # Assuming concatenation along a suitable axis
 
-    final1D = torch.stack(allObs1D).to(device) if allObs1D else torch.empty(0, device=device)
-    final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, device=device)
+    final1D = torch.stack(allObs1D).to(device) if allObs1D else torch.empty(0, dtype=torch.float32, device=device)
+    final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, dtype=torch.float32, device=device)
     return final1D, final3D
 
 class QNetwork(nn.Module):
@@ -289,13 +289,18 @@ class SAC(nn.Module):
         if action is None:
             action = torch.stack([distribution.sample() for distribution in actionDistributions])
         # print(f"SplitLogits: {splitLogits} of shape\n")
-        # print(f"Actions: {action}")
-        # print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
+        print(f"Actions: {action}")
+        print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
+        for a, distribution in zip(action, actionDistributions):
+            print(f"a: {a}, distribution: {distribution}")
         logprobs = torch.stack([distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)])
-        probs = torch.stack([distribution.log_prob(a).exp() for a, distribution in zip(action, actionDistributions)])
-        print(f"action of shape {action.shape},\nprobs of shape {probs.shape},\nlogprobs of shape {logprobs.shape}\n")
-        print(f"BUT RETURNING action of shape {action.T.shape},\nprobs of shape {logprobs.T.sum(-1).shape},\nlogprobs of shape {probs.T.prod(-1).shape}\n\n")
+        probs = torch.stack([distribution.probs[a] for a, distribution in zip(action, actionDistributions)])
+        # probs = torch.stack([distribution.log_prob(a).exp() for a, distribution in zip(action, actionDistributions)])
+        # print(f"action of shape {action.shape},\nprobs of shape {probs.shape},\nlogprobs of shape {logprobs.shape}\n")
+        # print(f"BUT RETURNING action of shape {action.T.shape},\nprobs of shape {logprobs.T.sum(-1).shape},\nlogprobs of shape {probs.T.prod(-1).shape}\n\n")
         # logprobs = logprobs.sum()BUT
+        print(f"logprobs: {logprobs} of shape {logprobs.shape} and probs {probs} of shape {probs.shape}")
+        print(f"WE TRANSFORM IT AND GET logprobs: {logprobs.T.sum(-1)} of shape {logprobs.T.sum(-1).shape} and probs {probs.T.prod(-1)} of shape {probs.T.prod(-1).shape}")
         return action.T, logprobs.T.sum(-1), probs.T.prod(-1)
     
         # obs1D, obs3D = processObservations(x)
