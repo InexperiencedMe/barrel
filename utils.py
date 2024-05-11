@@ -8,6 +8,7 @@ from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 from collections import deque, namedtuple
 import random
+from itertools import product
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
@@ -296,8 +297,8 @@ class SAC(nn.Module):
         # print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
         # for a, distribution in zip(action, actionDistributions):
         #     print(f"a: {a}, distribution: {distribution}")
-        logprobs = [F.log_softmax(logits, dim=1) for logits in splitLogits]
-        probs = [distribution.probs for distribution in actionDistributions]
+        logprobsList = [F.log_softmax(logits, dim=1) for logits in splitLogits]
+        # probsList = [distribution.probs for distribution in actionDistributions]
         # logprobs = [distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]
         # probs = [distribution.log_prob().exp() for a, distribution in zip(action, actionDistributions)]
         # probs = [distribution.probs.gather(-1, a.unsqueeze(-1)) for a, distribution in zip(action, actionDistributions)]
@@ -308,8 +309,21 @@ class SAC(nn.Module):
         # print(f"logprobs: {logprobs} of shape {logprobs.shape} and probs {probs} of shape {probs.shape}")
         # print(f"WE TRANSFORM IT AND GET logprobs: {logprobs.T.sum(-1)} of shape {logprobs.T.sum(-1).shape} and probs {probs.squeeze(-1).T.prod(-1)} of shape {probs.squeeze(-1).T.prod(-1).shape}")
         # return action.T, logprobs.T, probs.squeeze(-1).T
-        print(f"ACTOR RETURNING DISCRETE action: {action.T},\nlogprobs: {logprobs},\nprobs: {probs}")
-        return action.T, logprobs, probs
+        # print(f"DISCRETE action: {action.T},\nlogprobsList: {logprobsList}")#,\nprobsList: {probsList}")
+
+        columns = [[discreteActionLogprobs[:, i] for i in range(discreteActionLogprobs.shape[-1])] for discreteActionLogprobs in logprobsList]
+        combinations = list(product(*columns))
+        finalLogprobs = torch.stack([sum(combination) for combination in combinations], -1)
+
+        # columns = [[discreteActionProbs[:, i] for i in range(discreteActionProbs.shape[-1])] for discreteActionProbs in probsList]
+        # combinations = list(product(*columns))
+        # finalProbs = torch.stack([combination.prod() for combination in combinations], -1)
+
+        finalProbs = finalLogprobs.exp()
+
+        # print(f"logprobsFinal:\n{finalLogprobs} of shape {finalLogprobs.shape},\nprobsFinal:\n{finalProbs} of shape{finalProbs.shape}")
+
+        return action.T, finalLogprobs, finalProbs
     
         # obs1D, obs3D = processObservations(x)
         # observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
