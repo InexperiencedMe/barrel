@@ -67,11 +67,11 @@ class UnityInterface():
             agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         return agentsCount
 
-@torch.no_grad()
+# @torch.no_grad()
 def calculateConvNetOutputSize(net, inputSize):
     return torch.numel(net(torch.ones(inputSize)))
 
-@torch.no_grad()
+# @torch.no_grad()
 def getObsSizes(specs):
     obsSize1D = 0
     osbSize3D = [0, 0, 0]
@@ -85,7 +85,7 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
-@torch.no_grad()
+# @torch.no_grad()
 def processObservations(x):
     allObs1D, allObs3D = [], []
     for observation in x:
@@ -121,6 +121,8 @@ class QNetwork(nn.Module):
         self.usingDiscreteActions = len(self.envSpecs["DiscreteActions"]) > 0
         self.usingContinuousActions = self.continuousActionSize > 0
 
+        self.outputSize = np.array(self.envSpecs["DiscreteActions"]).prod() if self.usingDiscreteActions else 1
+
         if self.using1Dobs:
             self.preCritic1DoutputSize = 128
             self.preCritic1D = nn.Sequential(
@@ -135,7 +137,8 @@ class QNetwork(nn.Module):
             with torch.no_grad():
                 self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 128), nn.ReLU(), nn.Linear(128, 1))
+        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 128),
+                                         nn.ReLU(), nn.Linear(128, self.outputSize))
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
@@ -143,7 +146,7 @@ class QNetwork(nn.Module):
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
         out = self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
         # print(f"IN CRITIC FORWARD We got obsF: {standardObsFeatures}, obsA: {actionObsFeatures} and outputting {out}")
-        return out
+        return out.reshape(-1, *self.envSpecs["DiscreteActions"]) if self.usingDiscreteActions else out
         
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
@@ -289,19 +292,24 @@ class SAC(nn.Module):
         if action is None:
             action = torch.stack([distribution.sample() for distribution in actionDistributions])
         # print(f"SplitLogits: {splitLogits} of shape\n")
-        print(f"Actions: {action}")
-        print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
-        for a, distribution in zip(action, actionDistributions):
-            print(f"a: {a}, distribution: {distribution}")
-        logprobs = torch.stack([distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)])
-        probs = torch.stack([distribution.probs[a] for a, distribution in zip(action, actionDistributions)])
+        # print(f"Actions: {action}")
+        # print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
+        # for a, distribution in zip(action, actionDistributions):
+        #     print(f"a: {a}, distribution: {distribution}")
+        logprobs = [F.log_softmax(logits, dim=1) for logits in splitLogits]
+        probs = [distribution.probs for distribution in actionDistributions]
+        # logprobs = [distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]
+        # probs = [distribution.log_prob().exp() for a, distribution in zip(action, actionDistributions)]
+        # probs = [distribution.probs.gather(-1, a.unsqueeze(-1)) for a, distribution in zip(action, actionDistributions)]
         # probs = torch.stack([distribution.log_prob(a).exp() for a, distribution in zip(action, actionDistributions)])
         # print(f"action of shape {action.shape},\nprobs of shape {probs.shape},\nlogprobs of shape {logprobs.shape}\n")
         # print(f"BUT RETURNING action of shape {action.T.shape},\nprobs of shape {logprobs.T.sum(-1).shape},\nlogprobs of shape {probs.T.prod(-1).shape}\n\n")
         # logprobs = logprobs.sum()BUT
-        print(f"logprobs: {logprobs} of shape {logprobs.shape} and probs {probs} of shape {probs.shape}")
-        print(f"WE TRANSFORM IT AND GET logprobs: {logprobs.T.sum(-1)} of shape {logprobs.T.sum(-1).shape} and probs {probs.T.prod(-1)} of shape {probs.T.prod(-1).shape}")
-        return action.T, logprobs.T.sum(-1), probs.T.prod(-1)
+        # print(f"logprobs: {logprobs} of shape {logprobs.shape} and probs {probs} of shape {probs.shape}")
+        # print(f"WE TRANSFORM IT AND GET logprobs: {logprobs.T.sum(-1)} of shape {logprobs.T.sum(-1).shape} and probs {probs.squeeze(-1).T.prod(-1)} of shape {probs.squeeze(-1).T.prod(-1).shape}")
+        # return action.T, logprobs.T, probs.squeeze(-1).T
+        print(f"ACTOR RETURNING DISCRETE action: {action.T},\nlogprobs: {logprobs},\nprobs: {probs}")
+        return action.T, logprobs, probs
     
         # obs1D, obs3D = processObservations(x)
         # observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
