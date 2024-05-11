@@ -68,6 +68,14 @@ class UnityInterface():
             agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         return agentsCount
 
+# gpt magic
+def indexTensor(tensor, index):
+    index = index.to(tensor.device)
+    batch_indices = [torch.arange(tensor.size(0), device=tensor.device)]
+    dim_indices = [index[:, i] for i in range(index.size(1))]
+    all_indices = batch_indices + dim_indices
+    return tensor[tuple(all_indices)]
+
 # @torch.no_grad()
 def calculateConvNetOutputSize(net, inputSize):
     return torch.numel(net(torch.ones(inputSize)))
@@ -323,7 +331,7 @@ class SAC(nn.Module):
 
         # print(f"logprobsFinal:\n{finalLogprobs} of shape {finalLogprobs.shape},\nprobsFinal:\n{finalProbs} of shape{finalProbs.shape}")
 
-        return action.T, finalLogprobs, finalProbs
+        return action.T, finalLogprobs.reshape(-1, *self.envSpecs["DiscreteActions"]), finalProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
     
         # obs1D, obs3D = processObservations(x)
         # observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
