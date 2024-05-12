@@ -76,11 +76,11 @@ def indexTensor(tensor, index):
     all_indices = batch_indices + dim_indices
     return tensor[tuple(all_indices)]
 
-# @torch.no_grad()
+@torch.no_grad()
 def calculateConvNetOutputSize(net, inputSize):
     return torch.numel(net(torch.ones(inputSize)))
 
-# @torch.no_grad()
+@torch.no_grad()
 def getObsSizes(specs):
     obsSize1D = 0
     osbSize3D = [0, 0, 0]
@@ -94,7 +94,7 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
-# @torch.no_grad()
+@torch.no_grad()
 def processObservations(x):
     allObs1D, allObs3D = [], []
     for observation in x:
@@ -280,13 +280,13 @@ class SAC(nn.Module):
         
         self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4)
 
-    def forward(self, x):
-        obs1D, obs3D = processObservations(x)
-        observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-        actionSample = self.actorContinuous(observationFeatures)
-        actionSampleTanh = torch.tanh(actionSample)
-        action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
-        return action
+    # def forward(self, x):
+    #     obs1D, obs3D = processObservations(x)
+    #     observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+    #     actionSample = self.actorContinuous(observationFeatures)
+    #     actionSampleTanh = torch.tanh(actionSample)
+    #     action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
+    #     return action
 
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
@@ -305,7 +305,7 @@ class SAC(nn.Module):
         # print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
         # for a, distribution in zip(action, actionDistributions):
         #     print(f"a: {a}, distribution: {distribution}")
-        logprobsList = [F.log_softmax(logits, dim=1) for logits in splitLogits]
+        logprobsList = [F.log_softmax(logits, dim=-1) for logits in splitLogits]
         # probsList = [distribution.probs for distribution in actionDistributions]
         # logprobs = [distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]
         # probs = [distribution.log_prob().exp() for a, distribution in zip(action, actionDistributions)]
