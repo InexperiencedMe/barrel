@@ -13,6 +13,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
 
+print(f"WERE USING THIS RIGHT")
+ 
 class UnityInterface():
     def __init__(self, envName=None):
         self.env = UnityEnvironment(file_name=envName)
