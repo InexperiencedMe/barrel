@@ -13,8 +13,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
 
-print(f"WERE USING THIS RIGHT")
- 
 class UnityInterface():
     def __init__(self, envName=None):
         self.env = UnityEnvironment(file_name=envName)
@@ -157,7 +155,7 @@ class QNetwork(nn.Module):
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
         out = self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
         # print(f"IN CRITIC FORWARD We got obsF: {standardObsFeatures}, obsA: {actionObsFeatures} and outputting {out}")
-        return out.reshape(-1, *self.envSpecs["DiscreteActions"]) if self.usingDiscreteActions else out
+        return out.reshape(-1, *self.envSpecs["DiscreteActions"]) if self.usingDiscreteActions else out.reshape(-1)
         
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
@@ -330,7 +328,7 @@ class SAC(nn.Module):
         # finalProbs = torch.stack([combination.prod() for combination in combinations], -1)
 
         finalProbs = finalLogprobs.exp()
-
+        # print(f"returning discrete logprobs of shape {finalLogprobs.shape}")
         # print(f"logprobsFinal:\n{finalLogprobs} of shape {finalLogprobs.shape},\nprobsFinal:\n{finalProbs} of shape{finalProbs.shape}")
 
         return action.T, finalLogprobs.reshape(-1, *self.envSpecs["DiscreteActions"]), finalProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
@@ -367,6 +365,7 @@ class SAC(nn.Module):
             logProbs = distribution.log_prob(actionSample)
             logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)#.sum(-1, keepdim=True) # CleanRL version
             logProbs = logProbs.sum(-1).view(-1)
+            # print(f"returning continuous logprobs of shape {logProbs.shape}")
         else:
             logProbs = None
         return action, logProbs
