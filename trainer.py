@@ -7,9 +7,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=2000)
 np.set_printoptions(linewidth=100, precision=4, suppress=True)
 
-# env = UnityInterface("Builds\\Ball3D\\UnityEnvironment")
+env = UnityInterface("Builds\\Ball3D\\UnityEnvironment")
 # env = UnityInterface("Builds\\Crawler\\UnityEnvironment")
-env = UnityInterface("Builds\\PushBlock\\UnityEnvironment")
+# env = UnityInterface("Builds\\PushBlock\\UnityEnvironment")
 # env = UnityInterface("Builds\\WallJump\\UnityEnvironment")
 # env = UnityInterface(None)
 
@@ -57,7 +57,7 @@ for behavior in behaviorNames:
     alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=1e-3)
 
 gamma = 0.99
-batchSize = 3
+batchSize = 32
 actorUpdateInterval = 1
 actorUpdateNumber = 1
 qnetsUpdateFrequency = 1
@@ -69,7 +69,7 @@ alphaLosses = []
 alphas = []
 QEvaluations = []
 logProbs = []
-totalSteps = 100
+totalSteps = 10000
 for i in range(1, totalSteps+1):
     # startInference = time.time()
     for behavior in behaviorNames:
@@ -159,34 +159,34 @@ for i in range(1, totalSteps+1):
                     nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = agents[behavior].getDiscreteActionAndValue(mem.nextObservations)
                     divider += 1
 
-                print(f"CRITIC OPTIM")
+                # print(f"CRITIC OPTIM")
                 QFunction1NextTarget = QNet[behavior].QNet1Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
                 QFunction2NextTarget = QNet[behavior].QNet2Target(mem.nextObservations, nextStateActionsContinuous, nextStateActionsDiscrete)
-                print(f"next state probs:\n{nextStateProbsDiscrete} of shape {nextStateProbsDiscrete.shape}")
-                print(f"next state log probs:\n{nextStateLogProbsDiscrete} of shape {nextStateLogProbsDiscrete.shape}")
-                print(f"min evaluation in critic optim\n{torch.min(QFunction1NextTarget, QFunction2NextTarget)} of shape {torch.min(QFunction1NextTarget, QFunction2NextTarget).shape}")
+                # print(f"next state probs:\n{nextStateProbsDiscrete} of shape {nextStateProbsDiscrete.shape}")
+                # print(f"next state log probs:\n{nextStateLogProbsDiscrete} of shape {nextStateLogProbsDiscrete.shape}")
+                # print(f"min evaluation in critic optim\n{torch.min(QFunction1NextTarget, QFunction2NextTarget)} of shape {torch.min(QFunction1NextTarget, QFunction2NextTarget).shape}")
                 # print(f"alpha logprobs term of shape {(alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider).shape}")
                 minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider)
-                print(f"minQNextTarget before sum:\n{minQNextTarget} of shape {minQNextTarget.shape}")
+                # print(f"minQNextTarget before sum:\n{minQNextTarget} of shape {minQNextTarget.shape}")
 
                 # print(f"minQNextTarget.shape: {minQNextTarget.shape}")
                 if minQNextTarget.ndim > 1:
                     minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
-                    print(f"minQNextTarget after sum:\n{minQNextTarget} of shape {minQNextTarget.shape}")
+                    # print(f"minQNextTarget after sum:\n{minQNextTarget} of shape {minQNextTarget.shape}")
                     # print(f"Summing minQNextTarget {minQNextTarget} of shape {minQNextTarget.shape} with sum axis {tuple(range(1, minQNextTarget.ndim))} to get {torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))} of shape {torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim))).shape}")
                 
                 # print(f"Resulting minQNextTarget {minQNextTarget} of shape {minQNextTarget.shape}, and it should be a shape of just (batchSize)")
                 nextQValue = torch.tensor(mem.rewards, device=device, dtype=torch.float32) + torch.logical_not(torch.tensor(mem.dones, device=device)) * gamma * minQNextTarget
-                print(f"nextQValue:\n{nextQValue} of shape {nextQValue.shape}")
+                # print(f"nextQValue:\n{nextQValue} of shape {nextQValue.shape}")
                 
             QFunction1ActionValues = QNet[behavior].QNet1(mem.observations, torch.stack(mem.actionsContinuous).to(device).detach() if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete).detach() if agents[behavior].usingDiscreteActions else None)
             QFunction2ActionValues = QNet[behavior].QNet2(mem.observations, torch.stack(mem.actionsContinuous).to(device).detach() if agents[behavior].usingContinuousActions else None, torch.stack(mem.actionsDiscrete).detach() if agents[behavior].usingDiscreteActions else None)
-            print(f"output of QFunction1ActionValues before gathering\n{QFunction1ActionValues} of shape {QFunction1ActionValues.shape}")
+            # print(f"output of QFunction1ActionValues before gathering\n{QFunction1ActionValues} of shape {QFunction1ActionValues.shape}")
 
             if agents[behavior].usingDiscreteActions:
                 QFunction1ActionValues = indexTensor(QFunction1ActionValues, torch.stack(mem.actionsDiscrete).to(device))
                 QFunction2ActionValues = indexTensor(QFunction2ActionValues, torch.stack(mem.actionsDiscrete).to(device))
-                print(f"output of QFunction1ActionValues after gathering\n{QFunction1ActionValues} of shape {QFunction1ActionValues.shape}")
+                # print(f"output of QFunction1ActionValues after gathering\n{QFunction1ActionValues} of shape {QFunction1ActionValues.shape}")
                 # print(f"QFunction1ActionValues: {QFunction1ActionValues} of shape: {QFunction1ActionValues.shape}")
                 # print(f"output of QFunction1ActionValues indexed with a function indexTensor is of shape {QFunction1ActionValues.shape}")
 
@@ -194,7 +194,7 @@ for i in range(1, totalSteps+1):
             QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
             QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
             QFunctionsTotalLoss = QFunction1Loss + QFunction2Loss
-            print(f"mse_loss of QFunction1ActionValues and nextqvalue difference is the critic loss\n\n")
+            # print(f"mse_loss of QFunction1ActionValues and nextqvalue difference is the critic loss\n\n")
 
             QNet[behavior].QNetsOptimizer.zero_grad()
             QFunctionsTotalLoss.backward()
@@ -208,7 +208,7 @@ for i in range(1, totalSteps+1):
                     # startActorOptim = time.time()
                     if j > 0:
                         mem = memory[behavior].sample(batchSize)
-                    print(f"ACTOR OPTIM")
+                    # print(f"ACTOR OPTIM")
                     stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, stateProbsDiscrete, divider = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device), torch.tensor(0, device=device)
                     
                     if agents[behavior].usingContinuousActions:
@@ -223,13 +223,13 @@ for i in range(1, totalSteps+1):
                     minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
                     # print(f"min evaluation {minQEvaluation} of shape {minQEvaluation.shape}")
                     # print(f"stateProbsDiscrete: {stateProbsDiscrete} of shape {stateProbsDiscrete.shape} multiplied by entropy term {(alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider)} of shape {(alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider)} minus minQEval")
-                    print(f"state probs:\n{nextStateProbsDiscrete} of shape {nextStateProbsDiscrete.shape}")
-                    print(f"state logprobs:\n{stateLogProbsDiscrete} of shape {stateLogProbsDiscrete.shape}")
-                    print(f"min evaluation in actor optim:\n{minQEvaluation} of shape {minQEvaluation.shape}")
+                    # print(f"state probs:\n{nextStateProbsDiscrete} of shape {nextStateProbsDiscrete.shape}")
+                    # print(f"state logprobs:\n{stateLogProbsDiscrete} of shape {stateLogProbsDiscrete.shape}")
+                    # print(f"min evaluation in actor optim:\n{minQEvaluation} of shape {minQEvaluation.shape}")
                     actorLoss = (stateProbsDiscrete * ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation)).mean()
                     # print(f"IN ACTOR OPTIM stateProbsDiscrete: {stateProbsDiscrete.shape}, logprobs: {((stateLogProbsContinuous + stateLogProbsDiscrete) / divider).shape}, minQEvaluation: {minQEvaluation.shape}")
                     # print(f"actorLoss: {actorLoss}")
-                    print(f"Actor loss is probs*(alpha*logprobs - minqeval).mean()\n\n")
+                    # print(f"Actor loss is probs*(alpha*logprobs - minqeval).mean()\n\n")
                     agents[behavior].actorOptimizer.zero_grad()
                     actorLoss.backward()
                     agents[behavior].actorOptimizer.step()
@@ -247,21 +247,20 @@ for i in range(1, totalSteps+1):
                     if j > 0:
                         mem = memory[behavior].sample(batchSize)
 
-                    with torch.no_grad():
-                        logProbabilitiesC, logProbabilitiesD, probsD, divider = torch.tensor(0, device=device), torch.tensor(0, device=device), 1, 0
-                        if agents[behavior].usingContinuousActions:
-                            _, logProbabilitiesC = agents[behavior].getContinuousActionAndValue(mem.observations)
-                            divider += 1
-                        if agents[behavior].usingDiscreteActions:
-                            _, logProbabilitiesD, probsD = agents[behavior].getDiscreteActionAndValue(mem.observations)
-                            divider += 1
-                    print(f"ALPHA OPTIM")
+                    logProbabilitiesC, logProbabilitiesD, probsD, divider = torch.tensor(0, device=device), torch.tensor(0, device=device), 1, 0
+                    if agents[behavior].usingContinuousActions:
+                        _, logProbabilitiesC = agents[behavior].getContinuousActionAndValue(mem.observations)
+                        divider += 1
+                    if agents[behavior].usingDiscreteActions:
+                        _, logProbabilitiesD, probsD = agents[behavior].getDiscreteActionAndValue(mem.observations)
+                        divider += 1
+                    # print(f"ALPHA OPTIM")
                     alphaLoss = (probsD*(-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior]))).mean()
-                    print(f"probsD:\n{probsD} of shape {probsD.shape}")
-                    print(f"logprobsD:\n{logProbabilitiesD} of shape {logProbabilitiesD.shape}")
-                    print(f"alpha:\n{logAlpha[behavior].exp()} of shape {logAlpha[behavior].exp().shape}")
-                    print(f"target entropy:\n{targetEntropy[behavior]} of shape {targetEntropy[behavior].shape}")
-                    print(f"alpha loss is: (probsD(-alpha*logprobs + target)).mean()\n\n")
+                    # print(f"probsD:\n{probsD} of shape {probsD.shape}")
+                    # print(f"logprobsD:\n{logProbabilitiesD} of shape {logProbabilitiesD.shape}")
+                    # print(f"alpha:\n{logAlpha[behavior].exp()} of shape {logAlpha[behavior].exp().shape}")
+                    # print(f"target entropy:\n{targetEntropy[behavior]} of shape {targetEntropy[behavior].shape}")
+                    # print(f"alpha loss is: (probsD(-alpha*logprobs + target)).mean()\n\n")
                     alphaOptimizer[behavior].zero_grad()
                     alphaLoss.backward()
                     alphaOptimizer[behavior].step()

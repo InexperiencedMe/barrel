@@ -76,11 +76,11 @@ def indexTensor(tensor, index):
     all_indices = batch_indices + dim_indices
     return tensor[tuple(all_indices)]
 
-@torch.no_grad()
+# @torch.no_grad()
 def calculateConvNetOutputSize(net, inputSize):
     return torch.numel(net(torch.ones(inputSize)))
 
-@torch.no_grad()
+# @torch.no_grad()
 def getObsSizes(specs):
     obsSize1D = 0
     osbSize3D = [0, 0, 0]
@@ -94,7 +94,7 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
-@torch.no_grad()
+# @torch.no_grad()
 def processObservations(x):
     allObs1D, allObs3D = [], []
     for observation in x:
@@ -292,6 +292,7 @@ class SAC(nn.Module):
     # TODO: Should combine the 2 action types and return empty action if not needed
     # NOTE: For now we never have a specific action. Its used in PPO, but SAC?
     def getDiscreteActionAndValue(self, x, action=None):
+            # print(f"### IN getDiscreteActionAndValue")
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         unsplitLogits = self.actorDiscrete(observationFeatures)
@@ -306,7 +307,8 @@ class SAC(nn.Module):
         # for a, distribution in zip(action, actionDistributions):
         #     print(f"a: {a}, distribution: {distribution}")
         logprobsList = [F.log_softmax(logits, dim=-1) for logits in splitLogits]
-        # probsList = [distribution.probs for distribution in actionDistributions]
+        probsList = [distribution.probs for distribution in actionDistributions]
+            # print(f"logprobsList:\n{logprobsList}\nprobsList:\n{probsList}")
         # logprobs = [distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]
         # probs = [distribution.log_prob().exp() for a, distribution in zip(action, actionDistributions)]
         # probs = [distribution.probs.gather(-1, a.unsqueeze(-1)) for a, distribution in zip(action, actionDistributions)]
@@ -319,20 +321,28 @@ class SAC(nn.Module):
         # return action.T, logprobs.T, probs.squeeze(-1).T
         # print(f"DISCRETE action: {action.T},\nlogprobsList: {logprobsList}")#,\nprobsList: {probsList}")
 
-        columns = [[discreteActionLogprobs[:, i] for i in range(discreteActionLogprobs.shape[-1])] for discreteActionLogprobs in logprobsList]
-        combinations = list(product(*columns))
-        finalLogprobs = torch.stack([sum(combination) for combination in combinations], -1)
-
+        columnsLogprobs = [[discreteActionLogprobs[:, i] for i in range(discreteActionLogprobs.shape[-1])] for discreteActionLogprobs in logprobsList]
+        combinationsLogprobs = list(product(*columnsLogprobs))
+        finalLogprobs = torch.stack([sum(combination) for combination in combinationsLogprobs], -1)
+            # print(f"finalLogprobs:\n{finalLogprobs} of shape {finalLogprobs.shape}")
+        finalLogprobs = finalLogprobs.reshape(-1, *self.envSpecs["DiscreteActions"])
+            # print(f"these logprobs we reshape into:\n{finalLogprobs} of shape {finalLogprobs.shape}")
         # columns = [[discreteActionProbs[:, i] for i in range(discreteActionProbs.shape[-1])] for discreteActionProbs in probsList]
         # combinations = list(product(*columns))
         # finalProbs = torch.stack([combination.prod() for combination in combinations], -1)
-
-        finalProbs = finalLogprobs.exp()
+        
+        columnsProbs = [[discreteActionProbs[:, i] for i in range(discreteActionProbs.shape[-1])] for discreteActionProbs in probsList]
+        combinationsProbs = list(product(*columnsProbs))
+        # Multiplying across the "sample" dimension for each column combination
+        finalProbs = torch.stack([torch.prod(torch.stack(combination), 0) for combination in combinationsProbs], -1)
+            # print(f"finalProbs:\n{finalProbs} of shape {finalProbs.shape}")
+        finalProbs = finalProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
+            # print(f"these probs we reshape into:\n{finalProbs} of shape {finalProbs.shape}\n\n")
+        # finalProbs = finalLogprobs.exp()
         # print(f"returning discrete logprobs of shape {finalLogprobs.shape}")
         # print(f"logprobsFinal:\n{finalLogprobs} of shape {finalLogprobs.shape},\nprobsFinal:\n{finalProbs} of shape{finalProbs.shape}")
 
-        return action.T, finalLogprobs.reshape(-1, *self.envSpecs["DiscreteActions"]), finalProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
-    
+        return action.T, finalLogprobs, finalProbs
         # obs1D, obs3D = processObservations(x)
         # observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         # logits = self.actorDiscrete(observationFeatures)
