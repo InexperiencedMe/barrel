@@ -7,11 +7,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=200)
 np.set_printoptions(linewidth=100, precision=4, suppress=True)
 
-env = UnityInterface("Builds\\Ball3D\\UnityEnvironment")
+# env = UnityInterface("Builds\\Ball3D\\UnityEnvironment")
 # env = UnityInterface("Builds\\Crawler\\UnityEnvironment")
 # env = UnityInterface("Builds\\PushBlock\\UnityEnvironment")
 # env = UnityInterface("Builds\\WallJump\\UnityEnvironment")
-# env = UnityInterface(None)
+env = UnityInterface(None)
 
 
 print(f"{env.getSpecs()}")
@@ -69,7 +69,7 @@ alphaLosses = []
 alphas = []
 QEvaluations = []
 logProbs = []
-totalSteps = 1000
+totalSteps = 10000
 for i in range(1, totalSteps+1):
     # startInference = time.time()
     for behavior in behaviorNames:
@@ -168,9 +168,10 @@ for i in range(1, totalSteps+1):
                 minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider)
                 
                 # THE CULPRIT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                # print(f"minQNextTarget.shape: {minQNextTarget.shape}")
                 if minQNextTarget.ndim > 1:
+                    # print(f"Summing minQNextTarget {minQNextTarget} of shape {minQNextTarget.shape} with sum axis {tuple(range(1, minQNextTarget.ndim))} to get {torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))} of shape {torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim))).shape}")
                     minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
-                    print(f"Summing minQNextTarget {minQNextTarget} of shape {minQNextTarget.shape} with sum axis {tuple(range(1, minQNextTarget.ndim))} to get {torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))} of shape {torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim))).shape}")
                 
                 # print(f"Resulting minQNextTarget {minQNextTarget} of shape {minQNextTarget.shape}, and it should be a shape of just (batchSize)")
                 nextQValue = torch.tensor(mem.rewards, device=device, dtype=torch.float32) + torch.logical_not(torch.tensor(mem.dones, device=device)) * gamma * minQNextTarget
@@ -244,8 +245,7 @@ for i in range(1, totalSteps+1):
                         if agents[behavior].usingDiscreteActions:
                             _, logProbabilitiesD, probsD = agents[behavior].getDiscreteActionAndValue(mem.observations)
                             divider += 1
-                    alphaLoss = probsD*((-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior]))).mean()
-
+                    alphaLoss = (probsD*(-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior]))).mean()
 
                     alphaOptimizer[behavior].zero_grad()
                     alphaLoss.backward()
