@@ -14,8 +14,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
 
 class UnityInterface():
-    def __init__(self, envName=None):
-        self.env = UnityEnvironment(file_name=envName)
+    def __init__(self, envName, seed):
+        self.env = UnityEnvironment(file_name=envName, seed=seed)
         self.env.reset()
         self.behaviorNames = list(self.env.behavior_specs)
         self.specs = self.prepareSpecs()
@@ -76,11 +76,9 @@ def indexTensor(tensor, index):
     all_indices = batch_indices + dim_indices
     return tensor[tuple(all_indices)]
 
-# @torch.no_grad()
 def calculateConvNetOutputSize(net, inputSize):
     return torch.numel(net(torch.ones(inputSize)))
 
-# @torch.no_grad()
 def getObsSizes(specs):
     obsSize1D = 0
     osbSize3D = [0, 0, 0]
@@ -94,7 +92,6 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
-# @torch.no_grad()
 def processObservations(x):
     allObs1D, allObs3D = [], []
     for observation in x:
@@ -154,6 +151,7 @@ class QNetwork(nn.Module):
         standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
         out = self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
+        # out = self.criticFinal(standardObsFeatures)
         # print(f"IN CRITIC FORWARD We got obsF: {standardObsFeatures}, obsA: {actionObsFeatures} and outputting {out}")
         return out.reshape(-1, *self.envSpecs["DiscreteActions"]) if self.usingDiscreteActions else out.reshape(-1)
         
