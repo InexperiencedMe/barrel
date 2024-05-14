@@ -68,8 +68,10 @@ class UnityInterface():
             agentsCount = len(set(decisionSteps).union(set(terminalSteps)))
         return agentsCount
 
-# gpt magic
-def indexTensor(tensor, index):
+# gpt magic. Indexing (batchSize, 3, 3, 3, 2) evaluation tensor with actions (batchSize, 4)
+# So I can take evaluation of the state if I took action (2, 1, 2, 0) for example.
+# Works well on multidiscrete of any size, checked by hand
+def gatherEvaluationOfTakenActions(tensor, index):
     index = index.to(tensor.device)
     batch_indices = [torch.arange(tensor.size(0), device=tensor.device)]
     dim_indices = [index[:, i] for i in range(index.size(1))]
@@ -107,7 +109,7 @@ def processObservations(x):
         if obs1D:
             allObs1D.append(torch.cat(obs1D))
         if obs3D:
-            allObs3D.append(torch.cat(obs3D))  # Assuming concatenation along a suitable axis
+            allObs3D.append(torch.cat(obs3D))
 
     final1D = torch.stack(allObs1D).to(device) if allObs1D else torch.empty(0, dtype=torch.float32, device=device)
     final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, dtype=torch.float32, device=device)
@@ -118,7 +120,7 @@ class QNetwork(nn.Module):
         super(QNetwork, self).__init__()
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
-        self.obsChannels3D = self.obsSize3D[-3] # first shape dim is channels
+        self.obsChannels3D = self.obsSize3D[-3] # third last element is number of channels. F.e. 3x128x128
         self.continuousActionSize = self.envSpecs["ContinuousActions"]
         self.preCritic1DoutputSize = 0
         self.preCritic3DoutputSize = 0

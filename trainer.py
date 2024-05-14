@@ -184,8 +184,8 @@ for i in range(1, totalSteps+1):
             # print(f"output of QFunction1ActionValues before gathering\n{QFunction1ActionValues} of shape {QFunction1ActionValues.shape}")
 
             if agents[behavior].usingDiscreteActions:
-                QFunction1ActionValues = indexTensor(QFunction1ActionValues, torch.stack(mem.actionsDiscrete).to(device))
-                QFunction2ActionValues = indexTensor(QFunction2ActionValues, torch.stack(mem.actionsDiscrete).to(device))
+                QFunction1ActionValues = gatherEvaluationOfTakenActions(QFunction1ActionValues, torch.stack(mem.actionsDiscrete).to(device))
+                QFunction2ActionValues = gatherEvaluationOfTakenActions(QFunction2ActionValues, torch.stack(mem.actionsDiscrete).to(device))
                 # print(f"output of QFunction1ActionValues after gathering\n{QFunction1ActionValues} of shape {QFunction1ActionValues.shape}")
                 # print(f"QFunction1ActionValues: {QFunction1ActionValues} of shape: {QFunction1ActionValues.shape}")
                 # print(f"output of QFunction1ActionValues indexed with a function indexTensor is of shape {QFunction1ActionValues.shape}")
