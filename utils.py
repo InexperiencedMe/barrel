@@ -94,6 +94,8 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
+# In Unity they have observation components that we have to deal with.
+# Observations come as tuple of ndarrays of either 1D or 3D, I simply concatenate it into one of each type
 def processObservations(x):
     allObs1D, allObs3D = [], []
     for observation in x:
@@ -242,8 +244,10 @@ class SAC(nn.Module):
         self.preActor3DoutputSize = 0
         self.using1Dobs = self.obsSize1D > 0
         self.using3Dobs = sum(self.obsSize3D) > 0
-
+        self.usingDiscreteActions = len(self.envSpecs["DiscreteActions"]) > 0
+        self.usingContinuousActions = self.continuousActionSize > 0
         assert self.using1Dobs or self.using3Dobs, "No 1D or 3D observations and you expect it to work?!?!?!?"
+        assert self.usingDiscreteActions or self.usingContinuousActions, "We have to use either continuous or discrete actions"
 
         if self.using1Dobs:      
             self.preActor1DoutputSize = 128
@@ -258,11 +262,6 @@ class SAC(nn.Module):
                 nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
-
-        self.usingDiscreteActions = len(self.envSpecs["DiscreteActions"]) > 0
-        self.usingContinuousActions = self.continuousActionSize > 0
-        assert self.usingDiscreteActions or self.usingContinuousActions, "We have to use either continuous or discrete actions"
-
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
                 nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.ReLU(),
@@ -270,7 +269,6 @@ class SAC(nn.Module):
             self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
             self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
             self.register_buffer("continuousActionBias", torch.tensor((continuousActionHighBound + continuousActionLowBound) / 2.0, dtype=torch.float32))
-
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
@@ -280,82 +278,49 @@ class SAC(nn.Module):
         
         self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4)
 
-    # def forward(self, x):
-    #     obs1D, obs3D = processObservations(x)
-    #     observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-    #     actionSample = self.actorContinuous(observationFeatures)
-    #     actionSampleTanh = torch.tanh(actionSample)
-    #     action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
-    #     return action
-
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
-    # NOTE: For now we never have a specific action. Its used in PPO, but SAC?
-    def getDiscreteActionAndValue(self, x, action=None):
-            # print(f"### IN getDiscreteActionAndValue")
+    def getDiscreteActionAndValue(self, x, action=None, withLogProbs=True):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         unsplitLogits = self.actorDiscrete(observationFeatures)
-        # print(f"Unsplit Logits shape: {unsplitLogits.shape}")
         splitLogits = torch.split(unsplitLogits, list(self.envSpecs["DiscreteActions"]), dim=-1)
         actionDistributions = [Categorical(logits=logits) for logits in splitLogits]
         if action is None:
             action = torch.stack([distribution.sample() for distribution in actionDistributions])
-        # print(f"SplitLogits: {splitLogits} of shape\n")
-        # print(f"Actions: {action}")
-        # print(f"Actions of shape {action.shape},\nActionDistributions: {actionDistributions}")
-        # for a, distribution in zip(action, actionDistributions):
-        #     print(f"a: {a}, distribution: {distribution}")
-        logprobsList = [F.log_softmax(logits, dim=-1) for logits in splitLogits]
-        probsList = [distribution.probs for distribution in actionDistributions]
-            # print(f"logprobsList:\n{logprobsList}\nprobsList:\n{probsList}")
-        # logprobs = [distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]
-        # probs = [distribution.log_prob().exp() for a, distribution in zip(action, actionDistributions)]
-        # probs = [distribution.probs.gather(-1, a.unsqueeze(-1)) for a, distribution in zip(action, actionDistributions)]
-        # probs = torch.stack([distribution.log_prob(a).exp() for a, distribution in zip(action, actionDistributions)])
-        # print(f"action of shape {action.shape},\nprobs of shape {probs.shape},\nlogprobs of shape {logprobs.shape}\n")
-        # print(f"BUT RETURNING action of shape {action.T.shape},\nprobs of shape {logprobs.T.sum(-1).shape},\nlogprobs of shape {probs.T.prod(-1).shape}\n\n")
-        # logprobs = logprobs.sum()BUT
-        # print(f"logprobs: {logprobs} of shape {logprobs.shape} and probs {probs} of shape {probs.shape}")
-        # print(f"WE TRANSFORM IT AND GET logprobs: {logprobs.T.sum(-1)} of shape {logprobs.T.sum(-1).shape} and probs {probs.squeeze(-1).T.prod(-1)} of shape {probs.squeeze(-1).T.prod(-1).shape}")
-        # return action.T, logprobs.T, probs.squeeze(-1).T
-        # print(f"DISCRETE action: {action.T},\nlogprobsList: {logprobsList}")#,\nprobsList: {probsList}")
 
-        columnsLogprobs = [[discreteActionLogprobs[:, i] for i in range(discreteActionLogprobs.shape[-1])] for discreteActionLogprobs in logprobsList]
-        combinationsLogprobs = list(product(*columnsLogprobs))
-        finalLogprobs = torch.stack([sum(combination) for combination in combinationsLogprobs], -1)
-            # print(f"finalLogprobs:\n{finalLogprobs} of shape {finalLogprobs.shape}")
-        finalLogprobs = finalLogprobs.reshape(-1, *self.envSpecs["DiscreteActions"])
-            # print(f"these logprobs we reshape into:\n{finalLogprobs} of shape {finalLogprobs.shape}")
-        # columns = [[discreteActionProbs[:, i] for i in range(discreteActionProbs.shape[-1])] for discreteActionProbs in probsList]
-        # combinations = list(product(*columns))
-        # finalProbs = torch.stack([combination.prod() for combination in combinations], -1)
-        
-        columnsProbs = [[discreteActionProbs[:, i] for i in range(discreteActionProbs.shape[-1])] for discreteActionProbs in probsList]
-        combinationsProbs = list(product(*columnsProbs))
-        # Multiplying across the "sample" dimension for each column combination
-        finalProbs = torch.stack([torch.prod(torch.stack(combination), 0) for combination in combinationsProbs], -1)
+        if withLogProbs:
+            logProbsList = [F.log_softmax(logits, dim=-1) for logits in splitLogits]
+            probsList = [distribution.probs for distribution in actionDistributions]
+            # print(f"logProbsList:\n{logProbsList},\nprobsList:\n{probsList}")
+
+            
+            # calculating finalLogProbs and finalProbs for multidiscrete actions:
+            # - take list of logprobs and distribution probs
+            # - permute them all together column wise, so for multidiscrete of size (3, 3, 3, 2) we have 3*3*3*2=54 permutations
+            # - Now we have logprobs and probs of any specific combination of actions. Logprobs summed, probs multiplied
+            # It's hard to see on PushBlock env of discrete action (7). WallJump of action (3, 3, 3, 2) is when the approach truly shines
+
+            columnsLogprobs = [[discreteActionLogprobs[:, i] for i in range(discreteActionLogprobs.shape[-1])] for discreteActionLogprobs in logProbsList]
+            combinationsLogProbs = list(product(*columnsLogprobs))
+            finalLogProbs = torch.stack([sum(combination) for combination in combinationsLogProbs], -1)
+            # print(f"finalLogProbs:\n{finalLogProbs} of shape {finalLogProbs.shape}")
+            finalLogProbs = finalLogProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
+            # print(f"these logprobs we reshape into:\n{finalLogProbs} of shape {finalLogProbs.shape}")
+            
+
+            columnsProbs = [[discreteActionProbs[:, i] for i in range(discreteActionProbs.shape[-1])] for discreteActionProbs in probsList]
+            combinationsProbs = list(product(*columnsProbs))
+            finalProbs = torch.stack([torch.prod(torch.stack(combination), 0) for combination in combinationsProbs], -1)
             # print(f"finalProbs:\n{finalProbs} of shape {finalProbs.shape}")
-        finalProbs = finalProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
+            finalProbs = finalProbs.reshape(-1, *self.envSpecs["DiscreteActions"])
             # print(f"these probs we reshape into:\n{finalProbs} of shape {finalProbs.shape}\n\n")
-        # finalProbs = finalLogprobs.exp()
-        # print(f"returning discrete logprobs of shape {finalLogprobs.shape}")
-        # print(f"logprobsFinal:\n{finalLogprobs} of shape {finalLogprobs.shape},\nprobsFinal:\n{finalProbs} of shape{finalProbs.shape}")
-
-        return action.T, finalLogprobs, finalProbs
-        # obs1D, obs3D = processObservations(x)
-        # observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
-        # logits = self.actorDiscrete(observationFeatures)
-        # split_logits = torch.split(logits, list(self.envSpecs["DiscreteActions"]), dim=-1)
-        # actionDistributions = [Categorical(logits=logits) for logits in split_logits]
-        # if action is None:
-        #     action = torch.stack([distribution.sample() for distribution in actionDistributions])
-        # logprobs = torch.stack([distribution.log_prob(a) for a, distribution in zip(action, actionDistributions)]).sum(0)  
-        # probs = logprobs.exp()
-        # # print(f"For Discrete Actions of size {list(self.envSpecs['DiscreteActions'])} we return batch logprobs {logprobs.sum(0)} of shape {logprobs.sum(0).shape}")
-        # return action.T, logprobs, probs
+        else:
+            finalLogProbs, finalProbs = None, None
         
-    def getContinuousActionAndValue(self, x, evaluation=False, withLogprobs=True):
+        return action.T, finalLogProbs, finalProbs
+        
+    def getContinuousActionAndValue(self, x, evaluation=False, withLogProbs=True):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         actionMean = self.actorContinuous(observationFeatures)
@@ -371,7 +336,7 @@ class SAC(nn.Module):
         actionSampleTanh = torch.tanh(actionSample)
         action = actionSampleTanh * self.continuousActionScale + self.continuousActionBias
         
-        if withLogprobs:
+        if withLogProbs:
             logProbs = distribution.log_prob(actionSample)
             logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)#.sum(-1, keepdim=True) # CleanRL version
             logProbs = logProbs.sum(-1).view(-1)
