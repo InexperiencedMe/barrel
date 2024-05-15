@@ -9,7 +9,7 @@ Development phase. Discrete action space doesn't work, continuous action space w
 It's a beginning of a library that conveniently interfaces with Unity engine to run and test RL algorithms on more complex custom environments. My dream is a model zoo, where I'd construct a beautiful video game scene to showcase RL algorithms and compare them, like a complete immersive playground for research and content creation.
 
 <p align="center">
-<img src="Doc resources/TemporaryCoverImage.jpg" style="width:75%;"/>
+<img src="ResourcesForREADME/TemporaryCoverImage.jpg" style="width:75%;"/>
 </p>
 
 For now though, the interface works fine, but first algorithm SAC, does not work too well. I'm building it in the most universal way possible, so I'm handling 3D observations (visual) and 1D observations (vector) with both continuous and multidiscrete actions in one algorithm. And the algorithm runs. No matter the action space or observation space, it will always run without errors and make random actions, but it doesn't learn well for now.
@@ -34,7 +34,7 @@ We support mostly Windows and Linux for now with server env builds, but it's eas
 To run the script, simply uncomment your desired environment and comment the rest, so they don't interfere. None environment is for working directly with Unity Editor.
 
 <p align="center">
-<img src="Doc resources/EnvCode.jpg" style="width:50%;"/>
+<img src="ResourcesForREADME/EnvCode.jpg" style="width:50%;"/>
 </p>
 
 What are the environments?
