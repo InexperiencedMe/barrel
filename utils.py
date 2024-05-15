@@ -155,66 +155,33 @@ class QNetwork(nn.Module):
         standardObsFeatures = self.getObservationFeaturesForCritic(obs1D, obs3D)
         actionObsFeatures = self.getActionRepresentationForInput(actionsContinuous, actionsDiscrete)
         out = self.criticFinal(torch.cat((standardObsFeatures, actionObsFeatures), -1))
-        # out = self.criticFinal(standardObsFeatures)
         # print(f"IN CRITIC FORWARD We got obsF: {standardObsFeatures}, obsA: {actionObsFeatures} and outputting {out}")
         return out.reshape(-1, *self.envSpecs["DiscreteActions"]) if self.usingDiscreteActions else out.reshape(-1)
         
     def getObservationFeaturesForCritic(self, obs1D, obs3D):
         if self.using1Dobs and self.using3Dobs:
-            # print(f"\nFeeding 1D precritic with {obs1D} and 3D precritic with {obs3D}")
-            # print(f"\nBranch1: cat preCritic1D out: {self.preCritic1D(obs1D)} and preCritic3D out: {self.preCritic3D(obs3D)}")
             return torch.cat((self.preCritic1D(obs1D), self.preCritic3D(obs3D)), -1)
         elif self.using1Dobs:
-            # print(f"\nBranch2: preCritic1D out: {self.preCritic1D(obs1D)}")
             return self.preCritic1D(obs1D)
         elif self.using3Dobs:
-            # print(f"\nBranch3: preCritic3D out: {self.preCritic3D(obs3D)}")
             return self.preCritic3D(obs3D)
-        
-        # netsOutputs = []
-        # if self.using1Dobs:
-        #     netsOutputs.append(self.preCritic1D(obs1D))
-        # if self.using3Dobs:
-        #     netsOutputs.append(self.preCritic3D(obs3D))
-        # return torch.cat(netsOutputs, -1)
 
     def getTotalActionSize(self):
         return self.continuousActionSize + sum(self.envSpecs["DiscreteActions"])
     
     def getActionRepresentationForInput(self, actionsContinuous=None, actionsDiscrete=None):
         featuresList = []
-        # print(f"func getActionRepresentationForInput, where C:{actionsContinuous}, D:{actionsDiscrete}")
         if self.usingContinuousActions:
-            # print(f"actionsContinuous: {actionsContinuous}")
-            # print(f"actionsContinuous.shape: {actionsContinuous.shape}")
             featuresList.append(actionsContinuous)
 
         if self.usingDiscreteActions:
-            # print(f"actionsDiscrete: {actionsDiscrete}")
-            onehots = []
-            
+            onehots = []    
             for i, discreteSize in enumerate(self.envSpecs["DiscreteActions"]):
-                # print(f"i: {i}, analyzed discrete action size: {discreteSize}")
-                # print(f"onehotting actionsDiscrete {actionsDiscrete}")
                 onehots.append(F.one_hot(actionsDiscrete[:, i], discreteSize))
             featuresList.append(torch.cat(onehots, -1))
     
         features = torch.cat(featuresList, -1)
-
-
-        # print(f"Final input respresentation (first 3):\n{features[:3]}")
         return features
-
-        # continuousFeatures = torch.empty(0, device=device)
-        # discreteFeatures = torch.empty(0, device=device)
-        
-        # if actionsContinuous != None:
-        #     continuousFeatures = torch.cat((continuousFeatures, actionsContinuous), -1)
-        # if actionsDiscrete != None:
-        #     discreteFeatures = torch.cat([F.one_hot(actionsDiscrete[:, i], size) for i, size in enumerate(self.envSpecs["DiscreteActions"])], -1)
-
-        # print(f"Full action features cat in critic {torch.cat((continuousFeatures, discreteFeatures))} of shape {torch.cat((continuousFeatures, discreteFeatures)).shape}")
-        # return torch.cat((continuousFeatures, discreteFeatures))
 
 class SoftQNetwork():
     def __init__(self, envSpecs):
