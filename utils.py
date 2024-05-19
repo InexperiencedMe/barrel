@@ -192,7 +192,7 @@ class SoftQNetwork():
         self.QNet1Target.load_state_dict(self.QNet1.state_dict())
         self.QNet2Target.load_state_dict(self.QNet2.state_dict())
 
-        self.QNetsOptimizer = optim.AdamW(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3)  
+        self.QNetsOptimizer = optim.AdamW(list(self.QNet1.parameters()) + list(self.QNet2.parameters()), lr=1e-3, eps=1e-4)  
         self.tau = 0.005
 
 LOG_STD_MAX = 2
@@ -243,11 +243,11 @@ class SAC(nn.Module):
                 nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
-        self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4)
+        self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4, eps=1e-4)
 
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
-    def getDiscreteActionAndValue(self, x, action=None, withLogProbs=True):
+    def getDiscreteAction(self, x, action=None, withLogProbs=True):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         unsplitLogits = self.actorDiscrete(observationFeatures)
@@ -287,7 +287,7 @@ class SAC(nn.Module):
         
         return action.T, finalLogProbs, finalProbs
         
-    def getContinuousActionAndValue(self, x, evaluation=False, withLogProbs=True):
+    def getContinuousAction(self, x, evaluation=False, withLogProbs=True):
         obs1D, obs3D = processObservations(x)
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         actionMean = self.actorContinuous(observationFeatures)
