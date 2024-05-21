@@ -34,7 +34,7 @@ class Args:
     track: bool = False
     capture_video: bool = False
     env_id: str = "LunarLander-v2"
-    total_timesteps: int = 50000
+    total_timesteps: int = 10000
     buffer_size: int = int(1e4)
     gamma: float = 0.99
     tau: float = 1.0
@@ -73,44 +73,49 @@ def layer_init(layer, bias_const=0.0):
 # See the SAC+AE paper https://arxiv.org/abs/1910.01741 for more info
 # TL;DR The actor's gradients mess up the representation when using a joint encoder
 class SoftQNetwork(nn.Module):
-    def __init__(self, envs):
+    def __init__(self):
         super().__init__()
-        self.fc1 = layer_init(nn.Linear(8, 512))
+        self.fc1 = layer_init(nn.Linear(210, 512))
         self.fc2 = layer_init(nn.Linear(512, 256))
         self.fc3 = layer_init(nn.Linear(256, 128))
-        self.fc_q = layer_init(nn.Linear(128, 4))
+        self.fc_q = layer_init(nn.Linear(128, 7))
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
+        obs1D, _ = processObservations(x)
+        x = F.relu(self.fc1(obs1D))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
         q_vals = self.fc_q(x)
-        return q_vals.view(-1, 4)
+        return q_vals.view(-1, 7)
 
 
 class Actor(nn.Module):
-    def __init__(self, envs):
+    def __init__(self):
         super().__init__()
-        self.fc1 = layer_init(nn.Linear(8, 512))
+        self.fc1 = layer_init(nn.Linear(210, 512))
         self.fc2 = layer_init(nn.Linear(512, 256))
         self.fc3 = layer_init(nn.Linear(256, 128))
-        self.fc_logits = layer_init(nn.Linear(128, 4))
+        self.fc_logits = layer_init(nn.Linear(128, 7))
 
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
+        obs1D, _ = processObservations(x)
+        x = F.relu(self.fc1(obs1D))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
         logits = self.fc_logits(x)
         return logits
 
-    def get_action(self, x):
+    def get_action(self, x, withLogProbs=True):
         logits = self(x)
         policy_dist = Categorical(logits=logits)
         action = policy_dist.sample()
         # Action probabilities for calculating the adapted soft-Q loss
-        action_probs = policy_dist.probs
-        log_prob = F.log_softmax(logits, dim=1)
+        if withLogProbs:
+            action_probs = policy_dist.probs
+            log_prob = F.log_softmax(logits, dim=-1)
+        else:
+            log_prob, action_probs = None, None
         # print(f"finalLogprobs:\n{log_prob} of shape {log_prob.shape}")
         # print(f"finalProbs:\n{action_probs} of shape {action_probs.shape}")
         return action, log_prob, action_probs
@@ -136,16 +141,14 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=args.seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+    behaviorNames = env.getBehaviorNames()
 
-    # env setup
-    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
-
-    actor = Actor(envs).to(device)
-    qf1 = SoftQNetwork(envs).to(device)
-    qf2 = SoftQNetwork(envs).to(device)
-    qf1_target = SoftQNetwork(envs).to(device)
-    qf2_target = SoftQNetwork(envs).to(device)
+    actor = Actor().to(device)
+    qf1 = SoftQNetwork().to(device)
+    qf2 = SoftQNetwork().to(device)
+    qf1_target = SoftQNetwork().to(device)
+    qf2_target = SoftQNetwork().to(device)
     qf1_target.load_state_dict(qf1.state_dict())
     qf2_target.load_state_dict(qf2.state_dict())
     # TRY NOT TO MODIFY: eps=1e-4 increases numerical stability
@@ -154,7 +157,7 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
 
     # Automatic entropy tuning
     if args.autotune:
-        target_entropy = -args.target_entropy_scale * torch.log(1 / torch.tensor(envs.single_action_space.n))
+        target_entropy = -args.target_entropy_scale * torch.log(1 / torch.tensor(7))
         log_alpha = torch.zeros(1, requires_grad=True, device=device)
         alpha = log_alpha.exp().item()
         a_optimizer = optim.Adam([log_alpha], lr=args.q_lr, eps=1e-4)
@@ -162,41 +165,81 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
     else:
         alpha = args.alpha
 
+    totalAgentsCounts = 0
+    for behavior in behaviorNames:
+        totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
+    observationBuffer = [None] * totalAgentsCounts
+    actionsBuffer = [None] * totalAgentsCounts
+    rewards = [0] * totalAgentsCounts
+
     rb = Memory(5000)
     start_time = time.time()
     finalRewards, qnetsLosses, actorLosses, alphaLosses, alphas, QEvaluations, logProbs = [], [], [], [], [], [], []
-    # TRY NOT TO MODIFY: start the game
-    obs, _ = envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
-        # ALGO LOGIC: put action logic here
-        if global_step < args.learning_starts:
-            actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
-        else:
-            actions, _, _ = actor.get_action(torch.Tensor(obs).to(device))
-            actions = actions.detach().cpu().numpy()
+        for behavior in behaviorNames:
+            decisionSteps, terminalSteps = env.getSteps(behavior)
+            observationsThatNeedAction = []
+            for agent in decisionSteps:
 
-        # TRY NOT TO MODIFY: execute the game and log data.
-        # print(f"actions: {actions}")
-        next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+                observation = decisionSteps[agent].obs
+                observationsThatNeedAction.append(observation)
+                reward = decisionSteps[agent].reward
+                lastObservation = observationBuffer[agent]
+                lastActionDiscrete = actionsBuffer[agent]
+                if lastObservation != None and lastActionDiscrete != None:
+                    rb.push(lastObservation, None, lastActionDiscrete, reward, False, observation)
+                observationBuffer[agent] = observation
+                rewards[agent] += reward
+                
+            for agent in terminalSteps:
+                observation = terminalSteps[agent].obs
+                reward = terminalSteps[agent].reward
+                lastObservation = observationBuffer[agent]
+                lastActionDiscrete = actionsBuffer[agent]
+                # Technically could skip the action None check. If lastObs exist, action does too
+                if lastObservation != None and lastActionDiscrete != None:
+                    rb.push(lastObservation, None, lastActionDiscrete, reward, True, observation)
+                    observationBuffer[agent] = None
+                    actionsBuffer[agent] = None
+                    actionsBuffer[agent] = None
+                    # Save rewards only if we made an action before, otherwise the initial state was terminated state
+                    rewards[agent] += reward
+                    if rewards[agent] > 4:
+                        print(f"Final reward: {rewards[agent]:>.2f}")
+                finalRewards.append(rewards[agent])
+                rewards[agent] = 0
 
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        if "final_info" in infos:
-            for info in infos["final_info"]:
-                # Skip the envs that are not done
-                if "episode" not in info:
-                    continue
-                finalRewards.append(info['episode']['r'])
-                break
+            
+            behaviorActionsForThisStep = {}
+            specs = env.getSpecs(behavior)
+            nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
+            nrOfDiscreteActions = len(specs["DiscreteActions"])
+            behaviorActionsForThisStep["continuous"] = torch.zeros((len(decisionSteps), nrOfContinuousActions), requires_grad=False, dtype=torch.float32, device=device)
+            behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), requires_grad=False, dtype=torch.int32, device=device)
+            # print(f"Allocated discrete action buffer of shape {behaviorActionsForThisStep['discrete'].shape}")
+            # Batched pass to get actions  
+            if len(observationsThatNeedAction) > 0:
+                # if actor.usingContinuousActions:
+                #     behaviorActionsForThisStep["continuous"], _ = actor.getContinuousAction(observationsThatNeedAction, withLogProbs=False)
+                # if actor.usingDiscreteActions:
+                behaviorActionsForThisStep["discrete"], _, _ = actor.get_action((observationsThatNeedAction), withLogProbs=False)
 
-        # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
-        real_next_obs = next_obs.copy()
-        for idx, trunc in enumerate(truncations):
-            if trunc:
-                real_next_obs[idx] = infos["final_observation"][idx]
-        rb.push(obs.reshape(-1), None, actions, rewards, terminations, real_next_obs.reshape(-1))
+            # Transcribe the actions to buffer
+                for j, agent in enumerate(decisionSteps):
+                    # if nrOfContinuousActions > 0:
+                    #     actionsBuffer[agent] =  behaviorActionsForThisStep['coninuous'][j]
+                    # if nrOfDiscreteActions > 0:
+                    actionsBuffer[agent] = behaviorActionsForThisStep['discrete'][j]
 
-        # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-        obs = next_obs
+            # print(f"Setting Continuous actions: {behaviorActionsForThisStep}, Discrete actions: {behaviorActionsForThisStep}")
+            # print(f"Discrete action buffer shape after detachcpunumpy: {behaviorActionsForThisStep['discrete'].detach().cpu().numpy().shape}")
+            
+            # FIXME: I cannot be copying the original buffer to cpu. REWORK THIS
+            behaviorActionsForThisStep['discrete'] = behaviorActionsForThisStep['discrete'].detach().cpu().numpy()
+            if behaviorActionsForThisStep['discrete'].ndim == 1:
+                behaviorActionsForThisStep['discrete'] = np.expand_dims(behaviorActionsForThisStep['discrete'], -1)
+            env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'])
+        env.step()
         
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
@@ -298,7 +341,7 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
             if global_step % 200 == 0:
                 print(f"Step {global_step}, Actor loss: {actor_loss:>8.4f}, QF loss: {qf_loss:>8.4f}")
 
-    envs.close()
+    env.close()
 
     averagingNr = 10
     beginning = 0
