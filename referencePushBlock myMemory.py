@@ -27,18 +27,13 @@ from utils import *
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
     seed: int = 1
     torch_deterministic: bool = True
-    cuda: bool = True
-    track: bool = False
-    capture_video: bool = False
-    env_id: str = "LunarLander-v2"
-    total_timesteps: int = 10000
-    buffer_size: int = int(1e4)
+    total_timesteps: int = 1000
+    buffer_size: int = int(1e5)
     gamma: float = 0.99
     tau: float = 1.0
-    batch_size: int = 3
+    batch_size: int = 64
     learning_starts: int = 2e2
     policy_lr: float = 3e-4
     q_lr: float = 3e-4
@@ -47,19 +42,6 @@ class Args:
     alpha: float = 0.2
     autotune: bool = True
     target_entropy_scale: float = 0.89
-
-
-def make_env(env_id, seed, idx, capture_video, run_name):
-    def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id)
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        env.action_space.seed(seed)
-        return env
-    return thunk
 
 
 def layer_init(layer, bias_const=0.0):
@@ -118,29 +100,18 @@ class Actor(nn.Module):
             log_prob, action_probs = None, None
         # print(f"finalLogprobs:\n{log_prob} of shape {log_prob.shape}")
         # print(f"finalProbs:\n{action_probs} of shape {action_probs.shape}")
-        return action, log_prob, action_probs
+        return action.view(-1, 1), log_prob, action_probs
 
 
 if __name__ == "__main__":
-    import stable_baselines3 as sb3
-
-    if sb3.__version__ < "2.0":
-        raise ValueError(
-            """Ongoing migration: run the following command to install the new dependencies:
-
-poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-license]==0.28.1"  "ale-py==0.8.1" 
-"""
-        )
     args = tyro.cli(Args)
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
-    # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=args.seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
     behaviorNames = env.getBehaviorNames()
 
@@ -215,8 +186,9 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
             nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
             nrOfDiscreteActions = len(specs["DiscreteActions"])
             behaviorActionsForThisStep["continuous"] = torch.zeros((len(decisionSteps), nrOfContinuousActions), requires_grad=False, dtype=torch.float32, device=device)
-            behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), requires_grad=False, dtype=torch.int32, device=device)
+            behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), requires_grad=False, dtype=torch.long, device=device)
             # print(f"Allocated discrete action buffer of shape {behaviorActionsForThisStep['discrete'].shape}")
+
             # Batched pass to get actions  
             if len(observationsThatNeedAction) > 0:
                 # if actor.usingContinuousActions:
@@ -232,13 +204,9 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
                     actionsBuffer[agent] = behaviorActionsForThisStep['discrete'][j]
 
             # print(f"Setting Continuous actions: {behaviorActionsForThisStep}, Discrete actions: {behaviorActionsForThisStep}")
+            # print(f"Discrete action buffer shape before detachcpunumpy: {behaviorActionsForThisStep['discrete'].shape}")
             # print(f"Discrete action buffer shape after detachcpunumpy: {behaviorActionsForThisStep['discrete'].detach().cpu().numpy().shape}")
-            
-            # FIXME: I cannot be copying the original buffer to cpu. REWORK THIS
-            behaviorActionsForThisStep['discrete'] = behaviorActionsForThisStep['discrete'].detach().cpu().numpy()
-            if behaviorActionsForThisStep['discrete'].ndim == 1:
-                behaviorActionsForThisStep['discrete'] = np.expand_dims(behaviorActionsForThisStep['discrete'], -1)
-            env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'])
+            env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'].detach().cpu().numpy())
         env.step()
         
         # ALGO LOGIC: training.
@@ -246,7 +214,7 @@ poetry run pip install "stable_baselines3==2.0.0a1" "gymnasium[atari,accept-rom-
             if global_step % args.update_frequency == 0:
                 data = rb.sample(args.batch_size)
                 observationsBatch       =               torch.tensor(np.stack(data.observations), device=device, dtype=torch.float32)
-                actionsDiscreteBatch    =               torch.tensor(np.stack(data.actionsDiscrete), device=device, dtype=torch.long)
+                actionsDiscreteBatch    =               torch.stack(data.actionsDiscrete)
                 rewardsBatch            =               torch.tensor(np.stack(data.rewards), device=device, dtype=torch.float32)
                 isThereNextStepBatch    =               torch.logical_not(torch.tensor(np.stack(data.dones), device=device, dtype=torch.float32))
                 nextObservationsBatch   =               torch.tensor(np.stack(data.nextObservations), device=device, dtype=torch.float32)
