@@ -134,10 +134,10 @@ class QNetwork(nn.Module):
         self.outputSize = np.array(self.envSpecs["DiscreteActions"]).prod() if self.usingDiscreteActions else 1
 
         if self.using1Dobs:
-            self.preCritic1DoutputSize = 128
+            self.preCritic1DoutputSize = 256
             self.preCritic1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 256), nn.ReLU(),
-                nn.Linear(256, self.preCritic1DoutputSize), nn.ReLU())
+                nn.Linear(self.obsSize1D, 512), nn.ReLU(),
+                nn.Linear(512, self.preCritic1DoutputSize), nn.ReLU())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
@@ -217,10 +217,10 @@ class SAC(nn.Module):
         assert self.usingDiscreteActions or self.usingContinuousActions, "We have to use either continuous or discrete actions"
 
         if self.using1Dobs:      
-            self.preActor1DoutputSize = 128
+            self.preActor1DoutputSize = 256
             self.preActor1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 128), nn.ReLU(),
-                nn.Linear(128, self.preActor1DoutputSize), nn.ReLU())
+                nn.Linear(self.obsSize1D, 512), nn.ReLU(),
+                nn.Linear(512, self.preActor1DoutputSize), nn.ReLU())
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
@@ -239,8 +239,8 @@ class SAC(nn.Module):
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.ReLU(),
-                nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.ReLU(),
+                nn.Linear(128, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
         self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4, eps=1e-4)
