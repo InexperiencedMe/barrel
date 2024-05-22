@@ -1,4 +1,3 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/sac/#sac_ataripy
 import os
 import random
 import time
@@ -11,13 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import tyro
-from stable_baselines3.common.atari_wrappers import (
-    ClipRewardEnv,
-    EpisodicLifeEnv,
-    FireResetEnv,
-    MaxAndSkipEnv,
-    NoopResetEnv,
-)
 from stable_baselines3.common.buffers import ReplayBuffer
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
@@ -25,23 +17,21 @@ from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 from utils import *
 
-@dataclass
-class Args:
-    seed: int = 1
-    torch_deterministic: bool = True
-    total_timesteps: int = 10000
-    buffer_size: int = int(1e5)
-    gamma: float = 0.99
-    tau: float = 1.0
-    batch_size: int = 64
-    learning_starts: int = 2e2
-    policy_lr: float = 3e-4
-    q_lr: float = 3e-4
-    update_frequency: int = 4
-    target_network_frequency: int = 1000
-    alpha: float = 0.2
-    autotune: bool = True
-    target_entropy_scale: float = 0.89
+seed: int = 1
+torch_deterministic: bool = True
+totalTimesteps: int = 10000
+graph = True
+bufferSize: int = int(1e5)
+gamma: float = 0.99
+tau: float = 1.0
+batch_size: int = 64
+learning_starts: int = 80
+actorLR: float = 3e-4
+criticLR: float = 1e-3
+update_frequency: int = 4
+target_network_frequency: int = 1000
+alpha: float = 0.2
+targetEntropy_scale: float = 0.89
 
 
 def layer_init(layer, bias_const=0.0):
@@ -49,94 +39,80 @@ def layer_init(layer, bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-
-class Actor(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc1 = layer_init(nn.Linear(210, 512))
-        self.fc2 = layer_init(nn.Linear(512, 256))
-        self.fc3 = layer_init(nn.Linear(256, 128))
-        self.fc_logits = layer_init(nn.Linear(128, 7))
-
-
-    def forward(self, x):
-        obs1D, _ = processObservations(x)
-        x = F.relu(self.fc1(obs1D))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        logits = self.fc_logits(x)
-        return logits
-
-    def get_action(self, x, withLogProbs=True):
-        logits = self(x)
-        policy_dist = Categorical(logits=logits)
-        action = policy_dist.sample()
-        # Action probabilities for calculating the adapted soft-Q loss
-        if withLogProbs:
-            action_probs = policy_dist.probs
-            log_prob = F.log_softmax(logits, dim=-1)
-        else:
-            log_prob, action_probs = None, None
-        # print(f"finalLogprobs:\n{log_prob} of shape {log_prob.shape}")
-        # print(f"finalProbs:\n{action_probs} of shape {action_probs.shape}")
-        return action.view(-1, 1), log_prob, action_probs
-
-
-args = tyro.cli(Args)
-random.seed(args.seed)
-np.random.seed(args.seed)
-torch.manual_seed(args.seed)
-torch.backends.cudnn.deterministic = args.torch_deterministic
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.backends.cudnn.deterministic = torch_deterministic
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=args.seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-
+env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 
 actor = SAC(env.getSpecs(behaviorNames[0])).to(device)
-qf1 = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-qf2 = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-qf1_target = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-qf2_target = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-qf1_target.load_state_dict(qf1.state_dict())
-qf2_target.load_state_dict(qf2.state_dict())
-# TRY NOT TO MODIFY: eps=1e-4 increases numerical stability
-q_optimizer = optim.Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.q_lr, eps=1e-4)
-actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.policy_lr, eps=1e-4)
-
-# Automatic entropy tuning
-if args.autotune:
-    target_entropy = -args.target_entropy_scale * torch.log(1 / torch.tensor(7))
-    log_alpha = torch.zeros(1, requires_grad=True, device=device)
-    alpha = log_alpha.exp().item()
-    a_optimizer = optim.Adam([log_alpha], lr=args.q_lr, eps=1e-4)
-    # print(f"target entropy: {target_entropy}")
-else:
-    alpha = args.alpha
+# QFunction1 = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
+# QFunction2 = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
+# QFunction1Target = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
+# QFunction2Target = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
+# QFunction1Target.load_state_dict(QFunction1.state_dict())
+# QFunction2Target.load_state_dict(QFunction2.state_dict())
+# criticOptimizer = optim.Adam(list(QFunction1.parameters()) + list(QFunction2.parameters()), lr=criticLR, eps=1e-4)
 
 totalAgentsCounts = 0
 for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
+
+actor, actorOptimizer, memory, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}
+QFunction1, QFunction2, QFunction1Target, QFunction2Target, criticOptimizer = {}, {}, {}, {}, {}
+targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
+for behavior in behaviorNames:
+    envSpecs = env.getSpecs(behavior)
+    actor[behavior] = SAC(envSpecs).to(device)
+    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-4)
+    QFunction1[behavior] = QNetwork(envSpecs).to(device)
+    QFunction2[behavior] = QNetwork(envSpecs).to(device)
+    QFunction1Target[behavior] = QNetwork(envSpecs).to(device)
+    QFunction2Target[behavior] = QNetwork(envSpecs).to(device)
+    QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
+    QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
+    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-4)
+    
+    memory[behavior] = Memory(bufferSize)
+    assert actor[behavior].usingContinuousActions or actor[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
+
+    # Alpha tuning init
+    targetEntropy[behavior] = torch.tensor((0), dtype=torch.float, device=device)
+    divider = 0
+    if actor[behavior].usingDiscreteActions:
+        targetEntropy[behavior] -= targetEntropy_scale * torch.log(1 / torch.tensor(env.getSpecs(behavior)["DiscreteActions"]).prod().to(device))
+        divider += 1
+    if actor[behavior].usingContinuousActions:
+        targetEntropy[behavior] -= torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
+        divider += 1
+    targetEntropy[behavior] /= divider
+    print(f"Target entropy: {targetEntropy}")
+
+    logAlpha[behavior] = torch.zeros(1, requires_grad=True, device=device)
+    alpha[behavior] = logAlpha[behavior].exp().item()
+    alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=1e-3)
+
 observationBuffer = [None] * totalAgentsCounts
 actionsBuffer = [None] * totalAgentsCounts
-rewards = [0] * totalAgentsCounts
+rewards = np.zeros(totalAgentsCounts)
 
-rb = Memory(5000)
-start_time = time.time()
-finalRewards, qnetsLosses, actorLosses, alphaLosses, alphas, QEvaluations, logProbs = [], [], [], [], [], [], []
-for globalStep in range(args.total_timesteps):
+finalRewards, criticLosses, actorLosses, alphaLosses, alphas, QEvaluations, logProbs = [], [], [], [], [], [], []
+for globalStep in range(totalTimesteps):
     for behavior in behaviorNames:
         decisionSteps, terminalSteps = env.getSteps(behavior)
         observationsThatNeedAction = []
         for agent in decisionSteps:
-
             observation = decisionSteps[agent].obs
             observationsThatNeedAction.append(observation)
             reward = decisionSteps[agent].reward
             lastObservation = observationBuffer[agent]
             lastActionDiscrete = actionsBuffer[agent]
             if lastObservation != None and lastActionDiscrete != None:
-                rb.push(lastObservation, None, lastActionDiscrete, reward, False, observation)
+                memory[behavior].push(lastObservation, None, lastActionDiscrete, reward, False, observation)
             observationBuffer[agent] = observation
             rewards[agent] += reward
             
@@ -147,7 +123,7 @@ for globalStep in range(args.total_timesteps):
             lastActionDiscrete = actionsBuffer[agent]
             # Technically could skip the action None check. If lastObs exist, action does too
             if lastObservation != None and lastActionDiscrete != None:
-                rb.push(lastObservation, None, lastActionDiscrete, reward, True, observation)
+                memory[behavior].push(lastObservation, None, lastActionDiscrete, reward, True, observation)
                 observationBuffer[agent] = None
                 actionsBuffer[agent] = None
                 actionsBuffer[agent] = None
@@ -169,10 +145,10 @@ for globalStep in range(args.total_timesteps):
 
         # Batched pass to get actions  
         if len(observationsThatNeedAction) > 0:
-            # if actor.usingContinuousActions:
-            #     behaviorActionsForThisStep["continuous"], _ = actor.getContinuousAction(observationsThatNeedAction, withLogProbs=False)
-            # if actor.usingDiscreteActions:
-            behaviorActionsForThisStep["discrete"], _, _ = actor.getDiscreteAction((observationsThatNeedAction), withLogProbs=False)
+            if actor[behavior].usingContinuousActions:
+                behaviorActionsForThisStep["continuous"], _ = actor[behavior].getContinuousAction(observationsThatNeedAction, withLogProbs=False)
+            if actor[behavior].usingDiscreteActions:
+                behaviorActionsForThisStep["discrete"], _, _ = actor[behavior].getDiscreteAction((observationsThatNeedAction), withLogProbs=False)
 
         # Transcribe the actions to buffer
             for j, agent in enumerate(decisionSteps):
@@ -188,143 +164,141 @@ for globalStep in range(args.total_timesteps):
     env.step()
     
     # ALGO LOGIC: training.
-    if globalStep > args.learning_starts:
-        if globalStep % args.update_frequency == 0:
-            data = rb.sample(args.batch_size)
+    if globalStep > learning_starts:
+        if globalStep % update_frequency == 0:
+            data = memory[behavior].sample(batch_size)
             observationsBatch       =               torch.tensor(np.stack(data.observations), device=device, dtype=torch.float32)
-            actionsDiscreteBatch    =               torch.stack(data.actionsDiscrete)
+            actionsContinuousBatch  =               torch.stack(data.actionsContinuous) if actor[behavior].usingContinuousActions else None
+            actionsDiscreteBatch    =               torch.stack(data.actionsDiscrete) if actor[behavior].usingDiscreteActions else None
             rewardsBatch            =               torch.tensor(np.stack(data.rewards), device=device, dtype=torch.float32)
             isThereNextStepBatch    =               torch.logical_not(torch.tensor(np.stack(data.dones), device=device, dtype=torch.float32))
             nextObservationsBatch   =               torch.tensor(np.stack(data.nextObservations), device=device, dtype=torch.float32)
-            # print(f"Sampled obs:\n{observationsBatch} of shape {observationsBatch.shape},\nSampled actions:\n{actionsDiscreteBatch} of shape {actionsDiscreteBatch.shape}")
-            # CRITIC training
+            
+            # #################### CRITIC UPDATE
             with torch.no_grad():
-                # print(f"CRITIC OPTIM")
-                next_state_actions, next_state_log_pi, next_state_action_probs = actor.getDiscreteAction(nextObservationsBatch)
-                qf1_next_target = qf1_target(nextObservationsBatch, actionsDiscrete=next_state_actions)
-                qf2_next_target = qf2_target(nextObservationsBatch, actionsDiscrete=next_state_actions)
-                # print(f"output of critic is of shape {qf1_next_target.shape}")
-                # we can use the action probabilities instead of MC sampling to estimate the expectation
-                min_qf_next_target = next_state_action_probs * (
-                    torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
-                )
-                # print(f"next_state_action_probs:\n{next_state_action_probs} of shape {next_state_action_probs.shape}")
-                # print(f"next_state_log_probs\n{next_state_log_pi} of shape {next_state_log_pi.shape}")
-                # print(f"min evaluation in critic optim\n{torch.min(qf1_next_target, qf2_next_target)} of shape {torch.min(qf1_next_target, qf2_next_target).shape}")
+                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete, divider = None, None, 0, 0, 1, 0
+                if actor[behavior].usingContinuousActions:
+                    nextStateActionsContinuous, nextStateLogProbsContinuous = actor[behavior].getContinuousAction(nextObservationsBatch)
+                    divider += 1
+                if actor[behavior].usingDiscreteActions:
+                    nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor[behavior].getDiscreteAction(nextObservationsBatch)
+                    divider += 1
 
-                # adapt Q-target for discrete Q-function
-                # print(f"minQNextTarget before sum:\n{min_qf_next_target} of shape {min_qf_next_target.shape}")
-                min_qf_next_target = min_qf_next_target.sum(axis=tuple(range(1, min_qf_next_target.ndim)))
-                # print(f"minQNextTarget after sum:\n{min_qf_next_target} of shape {min_qf_next_target.shape}")
-                # print(f"rewardsBatchs of shape {rewardsBatch.shape}, nextStepBatch shape {isThereNextStepBatch.shape}, minqfnexttarget shape {min_qf_next_target.shape}")
-                next_q_value = rewardsBatch.flatten() + isThereNextStepBatch.flatten() * args.gamma * (min_qf_next_target)
-                next_q_value = rewardsBatch.flatten() + isThereNextStepBatch.flatten() * args.gamma * (min_qf_next_target)
-                # print(f"nextQValue:\n{next_q_value} of shape {next_q_value.shape}")
+                QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
+                QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
+                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider)
+                if minQNextTarget.ndim > 1:
+                    minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
+                nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
+                
+            QFunction1ActionValues = QFunction1[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
+            QFunction2ActionValues = QFunction2[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
+            if actor[behavior].usingDiscreteActions:
+                QFunction1ActionValues = gatherEvaluationOfTakenActions(QFunction1ActionValues, actionsDiscreteBatch)
+                QFunction2ActionValues = gatherEvaluationOfTakenActions(QFunction2ActionValues, actionsDiscreteBatch)
+            QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
+            QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
+            criticLoss = QFunction1Loss + QFunction2Loss
+            criticOptimizer[behavior].zero_grad()
+            criticLoss.backward()
+            criticOptimizer[behavior].step()
 
-            # use Q-values only for the taken actions
-            qf1_values = qf1(observationsBatch, actionsDiscrete=actionsDiscreteBatch)
-            qf2_values = qf2(observationsBatch, actionsDiscrete=actionsDiscreteBatch)
-            # print(f"output of QFunction1ActionValues before gathering\n{qf1_values} of shape {qf1_values.shape}")
-            # print(f"qf1values of shape {qf1_values.shape} gathering with actions of shape {actionsDiscreteBatch.shape}")
-            qf1_a_values = qf1_values.gather(1, actionsDiscreteBatch).view(-1)
-            qf2_a_values = qf2_values.gather(1, actionsDiscreteBatch).view(-1)
-            # print(f"output of QFunction1ActionValues after gathering\n{qf1_a_values} of shape {qf1_a_values.shape}")
-            qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
-            qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
-            qf_loss = qf1_loss + qf2_loss
-            # print(f"mse_loss of QFunction1ActionValues and nextqvalue difference is the critic loss\n\n")
 
-            q_optimizer.zero_grad()
-            qf_loss.backward()
-            q_optimizer.step()
 
-            # ACTOR training
-            _, log_pi, action_probs = actor.getDiscreteAction(observationsBatch)
-            # print(f"ACTOR OPTIM")
-            with torch.no_grad():
-                qf1_values = qf1(observationsBatch, actionsDiscrete=actionsDiscreteBatch)
-                qf2_values = qf2(observationsBatch, actionsDiscrete=actionsDiscreteBatch)
-                min_qf_values = torch.min(qf1_values, qf2_values)
-            # no need for reparameterization, the expectation can be calculated for discrete actions
-            actor_loss = (action_probs * ((alpha * log_pi) - min_qf_values)).mean()
-            # print(f"state probs:\n{action_probs} of shape {action_probs.shape}")
-            # print(f"state logprobs:\n{log_pi} of shape {log_pi.shape}")
-            # print(f"min evaluation in actor optim:\n{min_qf_values} of shape {min_qf_values.shape}")
-            # print(f"Actor loss is probs*(alpha*logprobs - minqeval).mean()\n\n")
-            actor_optimizer.zero_grad()
-            actor_loss.backward()
-            actor_optimizer.step()
+            # #################### ACTOR UPDATE
+            stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, stateProbsDiscrete, divider = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device), torch.tensor(0, device=device)
+            if actor[behavior].usingContinuousActions:
+                stateActionsContinuous, stateLogProbsContinuous = actor[behavior].getDiscreteAction(observationsBatch)
+                divider += 1
+            if actor[behavior].usingDiscreteActions:
+                stateActionsDiscrete, stateLogProbsDiscrete, stateProbsDiscrete = actor[behavior].getDiscreteAction(observationsBatch)
+                divider += 1
 
-            if args.autotune:
-                # re-use action probabilities for temperature loss
-                alpha_loss = (action_probs.detach() * (-log_alpha.exp() * (log_pi + target_entropy).detach())).mean()
-                # print(f"ALPHA OPTIM")
-                # print(f"probsD:\n{action_probs} of shape {action_probs.shape}")
-                # print(f"logprobsD:\n{log_pi} of shape {log_pi.shape}")
-                # print(f"alpha:\n{log_alpha.exp()} of shape {log_alpha.exp().shape}")
-                # print(f"target entropy:\n{target_entropy} of shape {target_entropy.shape}")
-                # print(f"alpha loss is: (probsD(-alpha*logprobs + target)).mean()\n\n")
+            QFunction1Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
+            QFunction2Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
+            minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
+            actorLoss = (stateProbsDiscrete * ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation)).mean()
+            actorOptimizer[behavior].zero_grad()
+            actorLoss.backward()
+            actorOptimizer[behavior].step()
 
-                a_optimizer.zero_grad()
-                alpha_loss.backward()
-                a_optimizer.step()
-                alpha = log_alpha.exp().item()
 
-            qnetsLosses.append(qf_loss)
-            actorLosses.append(actor_loss)
-            alphaLosses.append(alpha_loss)
-            alphas.append(alpha)
-            QEvaluations.append(min_qf_values.mean())
-            logProbs.append(log_pi.mean())
 
-        # update the target networks
-        if globalStep % args.target_network_frequency == 0:
-            for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
-                target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
-            for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
-                target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+            # #################### ALPHA UPDATE
+            logProbabilitiesC, logProbabilitiesD, probsD, divider = torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device), 0
+            if actor[behavior].usingContinuousActions:
+                _, logProbabilitiesC = actor[behavior].getContinuousAction(observationsBatch)
+                divider += 1
+            if actor[behavior].usingDiscreteActions:
+                _, logProbabilitiesD, probsD = actor[behavior].getDiscreteAction(observationsBatch)
+                divider += 1
+            alphaLoss = (probsD.detach()*(-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior]).detach())).mean()
+            alphaOptimizer[behavior].zero_grad()
+            alphaLoss.backward()
+            alphaOptimizer[behavior].step()
+            alpha[behavior] = logAlpha[behavior].exp().item()
 
-        if globalStep % 200 == 0:
-            print(f"Step {globalStep}, Actor loss: {actor_loss:>8.4f}, QF loss: {qf_loss:>8.4f}")
 
+
+            # update the target networks
+            if globalStep % target_network_frequency == 0:
+                for param, targetParam in zip(QFunction1[behavior].parameters(), QFunction1Target[behavior].parameters()):
+                    targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
+                for param, targetParam in zip(QFunction2[behavior].parameters(), QFunction2Target[behavior].parameters()):
+                    targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
+
+            if globalStep % 100 == 0:
+                print(f"Step {globalStep}, Actor loss: {actorLoss:>8.4f}, QF loss: {criticLoss:>8.4f}")
+
+
+
+            criticLosses.append(criticLoss)
+            actorLosses.append(actorLoss)
+            alphaLosses.append(alphaLoss)
+            alphas.append(alpha[behavior])
+            QEvaluations.append(minQEvaluation.mean())
+            logProbs.append(((stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean())
 env.close()
 
 
-averagingNr = 10
-beginning = 0
-dif_qnets = (len(qnetsLosses) - beginning) % averagingNr
 
-# Style
-plt.style.use('seaborn-v0_8-bright')
+if graph:
+    averagingNr = 10
+    beginning = 0
+    dif_qnets = (len(criticLosses) - beginning) % averagingNr
 
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 16), dpi=200)
+    # Style
+    plt.style.use('seaborn-v0_8-bright')
 
-ax1.plot(torch.tensor(actorLosses[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="actor loss")
-ax1.plot(torch.tensor(alphaLosses[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="alpha loss")
-ax1.plot(torch.tensor(alphas[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="alpha")
-ax1.plot(torch.tensor(QEvaluations[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="batch evaluation")
-ax1.plot(torch.tensor(logProbs[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="logprobs")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 16), dpi=200)
 
-ax1b = ax1.twinx()
-ax1b.plot(torch.tensor(qnetsLosses[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), 'm-', label="critic loss", linewidth=2)
-ax1b.set_ylabel("Critic Loss Value", color='r')
-ax1b.tick_params(axis='y', labelcolor='r')
+    ax1.plot(torch.tensor(actorLosses[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="actor loss")
+    ax1.plot(torch.tensor(alphaLosses[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="alpha loss")
+    ax1.plot(torch.tensor(alphas[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="alpha")
+    ax1.plot(torch.tensor(QEvaluations[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="batch evaluation")
+    ax1.plot(torch.tensor(logProbs[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), label="logprobs")
 
-ax1.set_title("SAC multidiscrete CleanRL LunarLander-V2")
-ax1.set_xlabel(f"Iterations / {averagingNr}")
-ax1.set_ylabel("Value")
-ax1.grid(True, linestyle='--', alpha=0.5)
-ax1.legend(loc='upper left')
-ax1b.legend(loc='upper right')
+    ax1b = ax1.twinx()
+    ax1b.plot(torch.tensor(criticLosses[beginning:-dif_qnets]).view(-1, averagingNr).mean(-1), 'm-', label="critic loss", linewidth=2)
+    ax1b.set_ylabel("Critic Loss Value", color='m')
+    ax1b.tick_params(axis='y')
+
+    ax1.set_title("SAC multidiscrete CleanRL LunarLander-V2")
+    ax1.set_xlabel(f"Iterations / {averagingNr}")
+    ax1.set_ylabel("Value")
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    ax1.legend(loc='upper left')
+    ax1b.legend(loc='upper right')
 
 
-averageNr = 5
-dif_rewards = len(finalRewards) % averageNr
-ax2.plot(torch.tensor(finalRewards[:-dif_rewards]).view(-1, averageNr).mean(-1))
-ax2.set_title("Final Rewards")
-ax2.set_xlabel(f"Iterations / {averageNr}")
-ax2.set_ylabel("Reward Value")
-ax2.grid(True, linestyle='--', alpha=0.5)
+    averageNr = 5
+    dif_rewards = len(finalRewards) % averageNr
+    ax2.plot(torch.tensor(finalRewards[:-dif_rewards]).view(-1, averageNr).mean(-1))
+    ax2.set_title("Final Rewards")
+    ax2.set_xlabel(f"Iterations / {averageNr}")
+    ax2.set_ylabel("Reward Value")
+    ax2.grid(True, linestyle='--', alpha=0.5)
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.subplot_tool()
+    plt.show()

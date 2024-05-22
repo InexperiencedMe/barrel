@@ -27,7 +27,7 @@ print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
 
-agents, QNet, memory, rewards, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}, {}
+agents, QNet, memory, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}
 totalAgentsCounts = 0
 for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
