@@ -183,7 +183,7 @@ class QNetwork(nn.Module):
         features = torch.cat(featuresList, -1)
         return features
 
-class SoftQNetwork(nn.Module):
+class SoftQNetwork():
     def __init__(self, envSpecs, criticLR):
         self.QFunction1 = QNetwork(envSpecs).to(device)
         self.QFunction2 = QNetwork(envSpecs).to(device)

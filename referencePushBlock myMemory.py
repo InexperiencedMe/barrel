@@ -1,21 +1,12 @@
-import os
 import random
-import time
-from dataclasses import dataclass
-
-import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import tyro
-from stable_baselines3.common.buffers import ReplayBuffer
-from torch.distributions.categorical import Categorical
-from torch.utils.tensorboard import SummaryWriter
-# torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=2000)
 import matplotlib.pyplot as plt
 from utils import *
+# torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=2000)
 
 seed: int = 1
 torch_deterministic: bool = True
@@ -48,15 +39,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
-
-actor = SAC(env.getSpecs(behaviorNames[0])).to(device)
-# QFunction1 = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-# QFunction2 = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-# QFunction1Target = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-# QFunction2Target = QNetwork(env.getSpecs(behaviorNames[0])).to(device)
-# QFunction1Target.load_state_dict(QFunction1.state_dict())
-# QFunction2Target.load_state_dict(QFunction2.state_dict())
-# criticOptimizer = optim.Adam(list(QFunction1.parameters()) + list(QFunction2.parameters()), lr=criticLR, eps=1e-4)
 
 totalAgentsCounts = 0
 for behavior in behaviorNames:
