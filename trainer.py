@@ -253,7 +253,7 @@ for globalStep in range(1, totalTimesteps+1):
                 alphaLosses.append(alphaLoss)
                 alphas.append(alpha[behavior])
                 QEvaluations.append(minQEvaluation.mean())
-                logProbs.append(((stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean())
+                logProbs.append((nextStateProbsDiscrete * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean())
 env.close()
 
 
