@@ -12,19 +12,18 @@ from utils import *
 
 seed: int = 1
 torch_deterministic: bool = True
-totalTimesteps: int = 60000
+totalTimesteps: int = 500
 graph = True
 bufferSize: int = int(1e5)
-gamma: float = 0.99
-tau: float = 1
-batch_size: int = 128
-learning_starts: int = 80
+gamma: float = 0.9
+tau: float = 0.05
+batch_size: int = 64
+learning_starts: int = 200
 actorLR: float = 1e-3
 criticLR: float = 1e-3
 update_frequency: int = 1
-target_network_frequency: int = 500
-alpha: float = 0.2
-targetEntropy_scale: float = 0.89
+target_network_frequency: int = 1
+targetEntropy_scale: float = 0.9
 
 
 def layer_init(layer, bias_const=0.0):
@@ -40,19 +39,19 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)      # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
 # env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
-env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
 # env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)    # 1D obs only, discrete action of size (3, 3, 3, 2)
 
 # env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                     # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
 # env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)               # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
 # env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                 # 1D obs only, discrete action of size (3, 3, 3, 2)
 
-# env = UnityInterface(None, seed=seed) 
+env = UnityInterface(None, seed=seed) 
 
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 
-totalAgentsCounts = 0
+totalAgentsCounts = 10000
 for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
 
@@ -62,14 +61,14 @@ targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
 for behavior in behaviorNames:
     envSpecs = env.getSpecs(behavior)
     actor[behavior] = SAC(envSpecs).to(device)
-    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-4)
+    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR)
     QFunction1[behavior] = QNetwork(envSpecs).to(device)
     QFunction2[behavior] = QNetwork(envSpecs).to(device)
     QFunction1Target[behavior] = QNetwork(envSpecs).to(device)
     QFunction2Target[behavior] = QNetwork(envSpecs).to(device)
     QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
     QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
-    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-4)
+    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR)
     
     memory[behavior] = Memory(bufferSize)
     assert actor[behavior].usingContinuousActions or actor[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
@@ -87,7 +86,7 @@ for behavior in behaviorNames:
 
     logAlpha[behavior] = torch.zeros(1, requires_grad=True, device=device)
     alpha[behavior] = logAlpha[behavior].exp().item()
-    alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=1e-3)
+    alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=criticLR)
 
 # FIXME: Add actions buffer continuous and discrete and test 3DBall
 observationBuffer = [None] * totalAgentsCounts
@@ -103,7 +102,7 @@ for globalStep in range(1, totalTimesteps+1):
         for agent in decisionSteps:
             observation = decisionSteps[agent].obs
             observationsThatNeedAction.append(observation)
-            reward = decisionSteps[agent].reward
+            reward = decisionSteps[agent].reward * 100
             lastObservation = observationBuffer[agent]
             lastActionContinuous = actionsBuffer[agent]['continuous']
             lastActionDiscrete = actionsBuffer[agent]['discrete']
@@ -114,7 +113,7 @@ for globalStep in range(1, totalTimesteps+1):
             
         for agent in terminalSteps:
             observation = terminalSteps[agent].obs
-            reward = terminalSteps[agent].reward
+            reward = terminalSteps[agent].reward * 100
             lastObservation = observationBuffer[agent]
             lastActionContinuous = actionsBuffer[agent]['continuous']
             lastActionDiscrete = actionsBuffer[agent]['discrete']
@@ -167,7 +166,7 @@ for globalStep in range(1, totalTimesteps+1):
             observationsBatch       =               data.observations
             actionsContinuousBatch  =               torch.stack(data.actionsContinuous) if actor[behavior].usingContinuousActions else None
             actionsDiscreteBatch    =               torch.stack(data.actionsDiscrete) if actor[behavior].usingDiscreteActions else None
-            rewardsBatch            =               torch.from_numpy(np.stack(data.rewards)).to(device)
+            rewardsBatch            =               torch.from_numpy(np.stack(data.rewards, dtype=np.float32)).to(device)
             isThereNextStepBatch    =               torch.logical_not(torch.tensor(np.stack(data.dones), device=device, dtype=torch.float32))
             nextObservationsBatch   =               data.nextObservations
             
@@ -183,7 +182,7 @@ for globalStep in range(1, totalTimesteps+1):
 
                 QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
                 QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
-                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider)
+                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - (alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider))
                 if minQNextTarget.ndim > 1:
                     minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
                 nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
@@ -244,57 +243,57 @@ for globalStep in range(1, totalTimesteps+1):
                 for param, targetParam in zip(QFunction2[behavior].parameters(), QFunction2Target[behavior].parameters()):
                     targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
 
-            if globalStep % 100 == 0:
+            if globalStep % 200 == 0:
                 print(f"Step {globalStep}, Actor loss: {actorLoss:>8.4f}, QF loss: {criticLoss:>8.4f}")
 
 
-
-            criticLosses.append(criticLoss)
-            actorLosses.append(actorLoss)
-            alphaLosses.append(alphaLoss)
-            alphas.append(alpha[behavior])
-            QEvaluations.append(minQEvaluation.mean())
-            logProbs.append(((stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean())
+            if globalStep % 1 == 0:
+                criticLosses.append(criticLoss)
+                actorLosses.append(actorLoss)
+                alphaLosses.append(alphaLoss)
+                alphas.append(alpha[behavior])
+                QEvaluations.append(minQEvaluation.mean())
+                logProbs.append(((stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean())
 env.close()
 
 
 if graph:
-    averagingNr = 200
+    averagingNr = 1
     beginning = 1
     dif = ((len(criticLosses) - beginning) % averagingNr) + averagingNr
 
     # Style
     plt.style.use('seaborn-v0_8-bright')
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 16), dpi=200)
+    fig, (ax1, ax2) = plt.subplots(2, 1)
 
     ax1.plot(torch.tensor(actorLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), label="actor loss")
     ax1.plot(torch.tensor(alphaLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alpha loss")
     ax1.plot(torch.tensor(alphas[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alpha")
     ax1.plot(torch.tensor(QEvaluations[beginning:-dif]).view(-1, averagingNr).mean(-1), label="batch evaluation")
     ax1.plot(torch.tensor(logProbs[beginning:-dif]).view(-1, averagingNr).mean(-1), label="logprobs")
-
+    ax1.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=3, fancybox=True, shadow=True)
     ax1b = ax1.twinx()
-    ax1b.plot(torch.tensor(criticLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), 'm-', label="critic loss", linewidth=2)
+    ax1b.plot(torch.tensor(criticLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), 'm-', label="critic loss")
     ax1b.set_ylabel("Critic Loss Value", color='m')
     ax1b.tick_params(axis='y')
     plt.gca().set_yscale('log')
 
-    ax1.set_title("SAC multidiscrete CleanRL LunarLander-V2")
+    ax1.set_title("SAC multidiscrete 500 steps basic env")
     ax1.set_xlabel(f"Iterations / {averagingNr}")
     ax1.set_ylabel("Value")
     ax1.grid(True, linestyle='--', alpha=0.5)
-    ax1.legend(loc='upper left')
-    ax1b.legend(loc='upper right')
 
 
-    averageNr = 10
-    dif_rewards = len(finalRewards) % averageNr
-    ax2.plot(torch.tensor(finalRewards[:-dif_rewards]).view(-1, averageNr).mean(-1))
+    averagingNrR = 1
+    dif_rewards = ((len(finalRewards) - beginning) % averagingNrR) + averagingNrR
+    ax2.plot(torch.tensor(finalRewards[beginning:-dif_rewards]).view(-1, averagingNrR).mean(-1))
     ax2.set_title("Final Rewards")
-    ax2.set_xlabel(f"Iterations / {averageNr}")
-    ax2.set_ylabel("Reward Value")
+    ax2.set_xlabel(f"Episode")
+    ax2.set_ylabel("Reward")
     ax2.grid(True, linestyle='--', alpha=0.5)
 
+    plt.legend()
     plt.tight_layout()
+    # plt.subplots_adjust(left=0.076, right=0.922, bottom=0.11, top=0.95, hspace=0.487)
     plt.show()

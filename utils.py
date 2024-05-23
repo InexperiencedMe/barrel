@@ -242,8 +242,6 @@ class SAC(nn.Module):
                 nn.Linear(128, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
-        self.actorOptimizer = optim.AdamW(list(self.parameters()), lr=3e-4, eps=1e-4)
-
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
     def getDiscreteAction(self, x, action=None, withLogProbs=True):
