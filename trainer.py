@@ -12,19 +12,19 @@ from utils import *
 
 seed: int = 1
 torch_deterministic: bool = True
-totalTimesteps: int = 20000
+totalTimesteps: int = 5000
 graph = True
 bufferSize: int = int(1e5)
 gamma: float = 0.9
 tau: float = 0.05
-batch_size: int = 128
-learning_starts: int = 500
+batch_size: int = 32
+learning_starts: int = 50
 actorLR: float = 1e-3
 criticLR: float = 1e-3
 update_frequency: int = 1
 target_network_frequency: int = 1
 targetEntropy_scale: float = 0.9
-rewardScaling: float = 100
+rewardScaling: float = 1
 
 
 def layer_init(layer, bias_const=0.0):
@@ -38,21 +38,22 @@ torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = torch_deterministic
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)      # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
-# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)    # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)              # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
+# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8
+# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)            # 1D obs only, discrete action of size (3, 3, 3, 2)
+env = UnityInterface("Builds\\Windows\\FoodCollector\\UnityEnvironment", seed=seed)       # 1D obs only, continous action of size 2 and discrete of size 1
 
-# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                     # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)               # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                 # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                             # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
+# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)                       # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                         # 1D obs only, discrete action of size (3, 3, 3, 2)
 
-env = UnityInterface(None, seed=seed) 
+# env = UnityInterface(None, seed=seed) 
 
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 
-totalAgentsCounts = 10000
+totalAgentsCounts = 0
 for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
 
@@ -97,7 +98,7 @@ for i in range(totalAgentsCounts):
     actionsBuffer[i] = {'continuous': None, 'discrete': None}
 rewards = np.zeros(totalAgentsCounts)
 
-finalRewards, criticLosses, actorLosses, alphaLosses, alphasC, alphasD, QEvaluations, logProbs = [], [], [], [], [], [], [], []
+finalRewards, criticLosses, actorLosses, alphaLosses, alphasC, alphasD, QEvaluations, logProbsC, logProbsD = [], [], [], [], [], [], [], [], []
 for globalStep in range(1, totalTimesteps+1):
     for behavior in behaviorNames:
         decisionSteps, terminalSteps = env.getSteps(behavior)
@@ -175,17 +176,22 @@ for globalStep in range(1, totalTimesteps+1):
             
             # #################### CRITIC UPDATE
             with torch.no_grad():
-                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete, alphaTerm = None, None, 0, 0, 1, torch.ones(1, device=device, dtype=torch.float32)
+                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete = None, None, 0, 0, 1
                 if actor[behavior].usingContinuousActions:
                     nextStateActionsContinuous, nextStateLogProbsContinuous = actor[behavior].getContinuousAction(nextObservationsBatch)
                 if actor[behavior].usingDiscreteActions:
                     nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor[behavior].getDiscreteAction(nextObservationsBatch)
 
+
+                # print(f"logprobsC:\n{nextStateLogProbsContinuous} of shape {nextStateLogProbsContinuous.shape}\n")
+                # print(f"logprobsD:\n{nextStateLogProbsDiscrete} of shape {nextStateLogProbsDiscrete.shape}\n")
+                # print(f"probsD:\n{nextStateProbsDiscrete} of shape {nextStateProbsDiscrete.shape}\n")
                 QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
                 QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
-                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - (alphaC[behavior]*nextStateLogProbsContinuous + alphaD[behavior]*nextStateLogProbsDiscrete))
+                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaD[behavior]*nextStateLogProbsDiscrete)
                 if minQNextTarget.ndim > 1:
                     minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
+                minQNextTarget -= alphaC[behavior]*nextStateLogProbsContinuous
                 nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
                 
             QFunction1ActionValues = QFunction1[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
@@ -213,7 +219,13 @@ for globalStep in range(1, totalTimesteps+1):
             QFunction1Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             QFunction2Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-            actorLoss = (stateProbsDiscrete * ((alphaC[behavior]*stateLogProbsContinuous + alphaD[behavior]*stateLogProbsDiscrete) - minQEvaluation)).mean()
+
+            actorLossD = (stateProbsDiscrete * (alphaD[behavior]*stateLogProbsDiscrete - minQEvaluation))
+            actorLossD = torch.sum(actorLossD, axis=tuple(range(1, actorLossD.ndim))).mean()
+            if minQEvaluation.ndim > 1:
+                minQEvaluation = torch.sum(minQEvaluation, axis=tuple(range(1, minQEvaluation.ndim)))
+            actorLossC = (alphaC[behavior] * stateLogProbsContinuous - minQEvaluation).mean()
+            actorLoss = actorLossC + actorLossD
             actorOptimizer[behavior].zero_grad()
             actorLoss.backward()
             actorOptimizer[behavior].step()
@@ -256,9 +268,11 @@ for globalStep in range(1, totalTimesteps+1):
                 alphasC.append(alphaC[behavior])
                 alphasD.append(alphaD[behavior])
                 QEvaluations.append(minQEvaluation.mean())
-                logProbs.append((stateProbsDiscrete * (stateLogProbsContinuous + stateLogProbsDiscrete)).mean())
+                if actor[behavior].usingContinuousActions:
+                    logProbsC.append(stateLogProbsContinuous.mean())
+                if actor[behavior].usingDiscreteActions:
+                    logProbsD.append((stateProbsDiscrete * stateLogProbsDiscrete).mean())
 env.close()
-
 
 if graph:
     averagingNr = 1
@@ -275,7 +289,10 @@ if graph:
     ax1.plot(torch.tensor(alphasC[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alphaC")
     ax1.plot(torch.tensor(alphasD[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alphaD")
     ax1.plot(torch.tensor(QEvaluations[beginning:-dif]).view(-1, averagingNr).mean(-1), label="batch evaluation")
-    ax1.plot(torch.tensor(logProbs[beginning:-dif]).view(-1, averagingNr).mean(-1), label="logprobs")
+    if logProbsC:
+        ax1.plot(torch.tensor(logProbsC[beginning:-dif]).view(-1, averagingNr).mean(-1), label="logprobsC")
+    if logProbsD:
+        ax1.plot(torch.tensor(logProbsD[beginning:-dif]).view(-1, averagingNr).mean(-1), label="logprobsD")
     ax1.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=3, fancybox=True, shadow=True)
     ax1b = ax1.twinx()
     ax1b.plot(torch.tensor(criticLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), 'm-', label="critic loss")
