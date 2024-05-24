@@ -12,18 +12,19 @@ from utils import *
 
 seed: int = 1
 torch_deterministic: bool = True
-totalTimesteps: int = 500
+totalTimesteps: int = 20000
 graph = True
 bufferSize: int = int(1e5)
 gamma: float = 0.9
 tau: float = 0.05
-batch_size: int = 64
-learning_starts: int = 200
+batch_size: int = 128
+learning_starts: int = 500
 actorLR: float = 1e-3
 criticLR: float = 1e-3
 update_frequency: int = 1
 target_network_frequency: int = 1
 targetEntropy_scale: float = 0.9
+rewardScaling: float = 100
 
 
 def layer_init(layer, bias_const=0.0):
@@ -57,7 +58,8 @@ for behavior in behaviorNames:
 
 actor, actorOptimizer, memory, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}
 QFunction1, QFunction2, QFunction1Target, QFunction2Target, criticOptimizer = {}, {}, {}, {}, {}
-targetEntropy, logAlpha, alpha, alphaOptimizer = {}, {}, {}, {}
+targetEntropyC, logAlphaC, alphaC, alphaOptimizerC = {}, {}, {}, {}
+targetEntropyD, logAlphaD, alphaD, alphaOptimizerD = {}, {}, {}, {}
 for behavior in behaviorNames:
     envSpecs = env.getSpecs(behavior)
     actor[behavior] = SAC(envSpecs).to(device)
@@ -74,19 +76,20 @@ for behavior in behaviorNames:
     assert actor[behavior].usingContinuousActions or actor[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
 
     # Alpha tuning init
-    targetEntropy[behavior] = torch.tensor((0), dtype=torch.float, device=device)
-    divider = 0
-    if actor[behavior].usingDiscreteActions:
-        targetEntropy[behavior] -= targetEntropy_scale * torch.log(1 / torch.tensor(env.getSpecs(behavior)["DiscreteActions"]).prod().to(device))
-        divider += 1
+    alphaC[behavior] = torch.tensor((0), dtype=torch.float, device=device)
     if actor[behavior].usingContinuousActions:
-        targetEntropy[behavior] -= torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
-        divider += 1
-    targetEntropy[behavior] /= divider
+        targetEntropyC[behavior] = -targetEntropy_scale * torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
+        logAlphaC[behavior] = torch.zeros(1, requires_grad=True, device=device)
+        alphaC[behavior] = logAlphaC[behavior].exp().item()
+        alphaOptimizerC[behavior] = optim.Adam([logAlphaC[behavior]], lr=criticLR)
+        
+    alphaD[behavior] = torch.tensor((0), dtype=torch.float, device=device)
+    if actor[behavior].usingDiscreteActions:
+        targetEntropyD[behavior] = -targetEntropy_scale * torch.log(1 / torch.tensor(env.getSpecs(behavior)["DiscreteActions"]).prod().to(device))
+        logAlphaD[behavior] = torch.zeros(1, requires_grad=True, device=device)
+        alphaD[behavior] = logAlphaD[behavior].exp().item()
+        alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR)
 
-    logAlpha[behavior] = torch.zeros(1, requires_grad=True, device=device)
-    alpha[behavior] = logAlpha[behavior].exp().item()
-    alphaOptimizer[behavior] = optim.Adam([logAlpha[behavior]], lr=criticLR)
 
 # FIXME: Add actions buffer continuous and discrete and test 3DBall
 observationBuffer = [None] * totalAgentsCounts
@@ -94,7 +97,7 @@ for i in range(totalAgentsCounts):
     actionsBuffer[i] = {'continuous': None, 'discrete': None}
 rewards = np.zeros(totalAgentsCounts)
 
-finalRewards, criticLosses, actorLosses, alphaLosses, alphas, QEvaluations, logProbs = [], [], [], [], [], [], []
+finalRewards, criticLosses, actorLosses, alphaLosses, alphasC, alphasD, QEvaluations, logProbs = [], [], [], [], [], [], [], []
 for globalStep in range(1, totalTimesteps+1):
     for behavior in behaviorNames:
         decisionSteps, terminalSteps = env.getSteps(behavior)
@@ -102,7 +105,7 @@ for globalStep in range(1, totalTimesteps+1):
         for agent in decisionSteps:
             observation = decisionSteps[agent].obs
             observationsThatNeedAction.append(observation)
-            reward = decisionSteps[agent].reward * 100
+            reward = decisionSteps[agent].reward * rewardScaling
             lastObservation = observationBuffer[agent]
             lastActionContinuous = actionsBuffer[agent]['continuous']
             lastActionDiscrete = actionsBuffer[agent]['discrete']
@@ -113,7 +116,7 @@ for globalStep in range(1, totalTimesteps+1):
             
         for agent in terminalSteps:
             observation = terminalSteps[agent].obs
-            reward = terminalSteps[agent].reward * 100
+            reward = terminalSteps[agent].reward * rewardScaling
             lastObservation = observationBuffer[agent]
             lastActionContinuous = actionsBuffer[agent]['continuous']
             lastActionDiscrete = actionsBuffer[agent]['discrete']
@@ -125,8 +128,8 @@ for globalStep in range(1, totalTimesteps+1):
                 actionsBuffer[agent]['discrete'] = None
                 # Save rewards only if we made an action before, otherwise the initial state was terminated state
                 rewards[agent] += reward
-                if rewards[agent] > 4:
-                    print(f"Final reward: {rewards[agent]:>.2f}")
+                # if rewards[agent] > 4 * rewardScaling:
+                #     print(f"Final reward: {rewards[agent]:>.2f}")
             finalRewards.append(rewards[agent])
             rewards[agent] = 0
 
@@ -172,17 +175,15 @@ for globalStep in range(1, totalTimesteps+1):
             
             # #################### CRITIC UPDATE
             with torch.no_grad():
-                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete, divider = None, None, 0, 0, 1, 0
+                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete, alphaTerm = None, None, 0, 0, 1, torch.ones(1, device=device, dtype=torch.float32)
                 if actor[behavior].usingContinuousActions:
                     nextStateActionsContinuous, nextStateLogProbsContinuous = actor[behavior].getContinuousAction(nextObservationsBatch)
-                    divider += 1
                 if actor[behavior].usingDiscreteActions:
                     nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor[behavior].getDiscreteAction(nextObservationsBatch)
-                    divider += 1
 
                 QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
                 QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
-                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - (alpha[behavior] * (nextStateLogProbsContinuous + nextStateLogProbsDiscrete) / divider))
+                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - (alphaC[behavior]*nextStateLogProbsContinuous + alphaD[behavior]*nextStateLogProbsDiscrete))
                 if minQNextTarget.ndim > 1:
                     minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
                 nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
@@ -201,19 +202,18 @@ for globalStep in range(1, totalTimesteps+1):
 
 
 
+            # TODO: I should reuse actor passes with alpha update. Alpha will update with the frequency of actor?
             # #################### ACTOR UPDATE
-            stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, stateProbsDiscrete, divider = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device), torch.tensor(0, device=device)
+            stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, stateProbsDiscrete = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device)
             if actor[behavior].usingContinuousActions:
                 stateActionsContinuous, stateLogProbsContinuous = actor[behavior].getContinuousAction(observationsBatch)
-                divider += 1
             if actor[behavior].usingDiscreteActions:
                 stateActionsDiscrete, stateLogProbsDiscrete, stateProbsDiscrete = actor[behavior].getDiscreteAction(observationsBatch)
-                divider += 1
 
             QFunction1Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             QFunction2Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-            actorLoss = (stateProbsDiscrete * ((alpha[behavior] * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider) - minQEvaluation)).mean()
+            actorLoss = (stateProbsDiscrete * ((alphaC[behavior]*stateLogProbsContinuous + alphaD[behavior]*stateLogProbsDiscrete) - minQEvaluation)).mean()
             actorOptimizer[behavior].zero_grad()
             actorLoss.backward()
             actorOptimizer[behavior].step()
@@ -221,18 +221,21 @@ for globalStep in range(1, totalTimesteps+1):
 
 
             # #################### ALPHA UPDATE
-            logProbabilitiesC, logProbabilitiesD, probsD, divider = torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device), 0
             if actor[behavior].usingContinuousActions:
                 _, logProbabilitiesC = actor[behavior].getContinuousAction(observationsBatch)
-                divider += 1
+                alphaLossC = (-logAlphaC[behavior].exp()*((logProbabilitiesC.to(device) + targetEntropyC[behavior]).detach())).mean()
+                alphaOptimizerC[behavior].zero_grad()
+                alphaLossC.backward()
+                alphaOptimizerC[behavior].step()
+                alphaC[behavior] = logAlphaC[behavior].exp().item()
+
             if actor[behavior].usingDiscreteActions:
                 _, logProbabilitiesD, probsD = actor[behavior].getDiscreteAction(observationsBatch)
-                divider += 1
-            alphaLoss = (probsD.detach()*(-logAlpha[behavior].exp()*((logProbabilitiesC.to(device) + logProbabilitiesD.to(device)) / divider + targetEntropy[behavior]).detach())).mean()
-            alphaOptimizer[behavior].zero_grad()
-            alphaLoss.backward()
-            alphaOptimizer[behavior].step()
-            alpha[behavior] = logAlpha[behavior].exp().item()
+                alphaLossD = (probsD.detach()*(-logAlphaD[behavior].exp()*(logProbabilitiesD.to(device) + targetEntropyD[behavior]).detach())).mean()
+                alphaOptimizerD[behavior].zero_grad()
+                alphaLossD.backward()
+                alphaOptimizerD[behavior].step()
+                alphaD[behavior] = logAlphaD[behavior].exp().item()
 
 
 
@@ -250,10 +253,10 @@ for globalStep in range(1, totalTimesteps+1):
             if globalStep % 1 == 0:
                 criticLosses.append(criticLoss)
                 actorLosses.append(actorLoss)
-                alphaLosses.append(alphaLoss)
-                alphas.append(alpha[behavior])
+                alphasC.append(alphaC[behavior])
+                alphasD.append(alphaD[behavior])
                 QEvaluations.append(minQEvaluation.mean())
-                logProbs.append((nextStateProbsDiscrete * (stateLogProbsContinuous + stateLogProbsDiscrete) / divider).mean())
+                logProbs.append((stateProbsDiscrete * (stateLogProbsContinuous + stateLogProbsDiscrete)).mean())
 env.close()
 
 
@@ -269,7 +272,8 @@ if graph:
 
     ax1.plot(torch.tensor(actorLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), label="actor loss")
     ax1.plot(torch.tensor(alphaLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alpha loss")
-    ax1.plot(torch.tensor(alphas[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alpha")
+    ax1.plot(torch.tensor(alphasC[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alphaC")
+    ax1.plot(torch.tensor(alphasD[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alphaD")
     ax1.plot(torch.tensor(QEvaluations[beginning:-dif]).view(-1, averagingNr).mean(-1), label="batch evaluation")
     ax1.plot(torch.tensor(logProbs[beginning:-dif]).view(-1, averagingNr).mean(-1), label="logprobs")
     ax1.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=3, fancybox=True, shadow=True)

@@ -183,16 +183,16 @@ class QNetwork(nn.Module):
         features = torch.cat(featuresList, -1)
         return features
 
-class SoftQNetwork():
-    def __init__(self, envSpecs, criticLR):
-        self.QFunction1 = QNetwork(envSpecs).to(device)
-        self.QFunction2 = QNetwork(envSpecs).to(device)
-        self.QFunction1Target = QNetwork(envSpecs).to(device)
-        self.QFunction2Target = QNetwork(envSpecs).to(device)
-        self.QFunction1Target.load_state_dict(self.QFunction1.state_dict())
-        self.QFunction2Target.load_state_dict(self.QFunction2.state_dict())
-        self.criticOptimizer = optim.Adam(list(self.QFunction1.parameters()) + list(self.QFunction2.parameters()), lr=criticLR, eps=1e-4)
-        self.tau = 0.005
+# class SoftQNetwork():
+#     def __init__(self, envSpecs, criticLR):
+#         self.QFunction1 = QNetwork(envSpecs).to(device)
+#         self.QFunction2 = QNetwork(envSpecs).to(device)
+#         self.QFunction1Target = QNetwork(envSpecs).to(device)
+#         self.QFunction2Target = QNetwork(envSpecs).to(device)
+#         self.QFunction1Target.load_state_dict(self.QFunction1.state_dict())
+#         self.QFunction2Target.load_state_dict(self.QFunction2.state_dict())
+#         self.criticOptimizer = optim.Adam(list(self.QFunction1.parameters()) + list(self.QFunction2.parameters()), lr=criticLR, eps=1e-4)
+#         self.tau = 0.005
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -10
