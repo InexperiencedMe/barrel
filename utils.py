@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
+from mlagents_envs.side_channel.environment_parameters_channel import EnvironmentParametersChannel
+from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
@@ -15,7 +17,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class UnityInterface():
     def __init__(self, envName, seed):
-        self.env = UnityEnvironment(file_name=envName, seed=seed)
+        self.channelEnvironment = EnvironmentParametersChannel()
+        self.channelEngine = EngineConfigurationChannel()
+        self.env = UnityEnvironment(file_name=envName, side_channels=[self.channelEnvironment, self.channelEngine], seed=seed)
         self.env.reset()
         self.behaviorNames = list(self.env.behavior_specs)
         self.specs = self.prepareSpecs()

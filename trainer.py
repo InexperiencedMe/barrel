@@ -12,7 +12,7 @@ from utils import *
 
 seed: int = 1
 torch_deterministic: bool = True
-totalTimesteps: int = 2000
+totalTimesteps: int = 20000
 graph = True
 bufferSize: int = int(1e5)
 gamma: float = 0.9
@@ -180,16 +180,16 @@ for globalStep in range(1, totalTimesteps+1):
                     nextStateActionsContinuous, nextStateLogProbsContinuous = actor[behavior].getContinuousAction(nextObservationsBatch)
                 if actor[behavior].usingDiscreteActions:
                     nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor[behavior].getDiscreteAction(nextObservationsBatch)
+                if actor[behavior].usingContinuousActions and actor[behavior].usingDiscreteActions:
+                    # print(f"nextStateLogProbsContinuous before the magic:\n{nextStateLogProbsContinuous} of shape {nextStateLogProbsContinuous.shape}")
+                    nextStateLogProbsContinuous = nextStateLogProbsContinuous.reshape(-1, 1).expand(-1, torch.tensor(actor[behavior].envSpecs["DiscreteActions"]).prod()).reshape(-1, *actor[behavior].envSpecs["DiscreteActions"])
+                    # print(f"nextStateLogProbsContinuous after the magic:\n{nextStateLogProbsContinuous} of shape {nextStateLogProbsContinuous.shape}\n")
 
                 QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
                 QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
-                minQNextTarget = nextStateProbsDiscrete*(torch.min(QFunction1NextTarget, QFunction2NextTarget) - alphaD[behavior]*nextStateLogProbsDiscrete)
+                minQNextTarget = nextStateProbsDiscrete*(torch.min(QFunction1NextTarget, QFunction2NextTarget)  - nextStateProbsDiscrete*alphaC[behavior]*nextStateLogProbsContinuous - alphaD[behavior]*nextStateLogProbsDiscrete)
                 if minQNextTarget.ndim > 1:
                     minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
-                if nextStateProbsDiscrete.ndim > 1:
-                    for dim in range(nextStateProbsDiscrete.ndim - 1, 0, -1):
-                        nextStateProbsDiscrete = torch.prod(nextStateProbsDiscrete, dim=dim)
-                minQNextTarget -= nextStateProbsDiscrete*alphaC[behavior]*nextStateLogProbsContinuous
                 nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
                 
             QFunction1ActionValues = QFunction1[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
@@ -213,16 +213,16 @@ for globalStep in range(1, totalTimesteps+1):
                 stateActionsContinuous, stateLogProbsContinuous = actor[behavior].getContinuousAction(observationsBatch)
             if actor[behavior].usingDiscreteActions:
                 stateActionsDiscrete, stateLogProbsDiscrete, stateProbsDiscrete = actor[behavior].getDiscreteAction(observationsBatch)
+            if actor[behavior].usingContinuousActions and actor[behavior].usingDiscreteActions:
+                stateLogProbsContinuous = stateLogProbsContinuous.reshape(-1, 1).expand(-1, torch.tensor(actor[behavior].envSpecs["DiscreteActions"]).prod()).reshape(-1, *actor[behavior].envSpecs["DiscreteActions"])
 
             QFunction1Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             QFunction2Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
-            actorLossD = (stateProbsDiscrete*(alphaD[behavior]*stateLogProbsDiscrete - minQEvaluation)).mean()
-            if minQEvaluation.ndim > 1:
-                actorLossC = (alphaC[behavior]*stateLogProbsContinuous - minQEvaluation.sum(tuple(range(1, minQEvaluation.ndim)))).mean()
-            else:
-                actorLossC = (alphaC[behavior]*stateLogProbsContinuous - minQEvaluation).mean()
-            # IDEA: multiply actorLossC with probsD
+            
+            actorLossD = (stateProbsDiscrete*(alphaD[behavior]*stateLogProbsDiscrete - minQEvaluation)).sum(tuple(range(1, minQEvaluation.ndim))).mean()
+            # print(f"probsD {stateProbsDiscrete.shape} times alphaC * probsD {stateProbsDiscrete.shape} times logprobsC {stateLogProbsContinuous.shape} - minqeval {minQEvaluation.shape}")
+            actorLossC = (stateProbsDiscrete*(alphaC[behavior]*stateProbsDiscrete*stateLogProbsContinuous - minQEvaluation)).sum(tuple(range(1, minQEvaluation.ndim))).mean()
             actorLoss = actorLossC + actorLossD
 
             actorOptimizer[behavior].zero_grad()
