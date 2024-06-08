@@ -10,22 +10,29 @@ from utils import *
 
 # TODO: If I substituted every dictionary usage with named_tuple, would that be much faster and worth the effort?
 
-seed: int = 1
+seed: int = 484
 torch_deterministic: bool = True
-totalTimesteps: int = 20000
-graph = True
-bufferSize: int = int(1e5)
-gamma: float = 0.9
-tau: float = 0.05
-batch_size: int = 128
-learning_starts: int = 500
-actorLR: float = 1e-3
-criticLR: float = 1e-3
-update_frequency: int = 1
+totalTimesteps: int = 500000
+bufferSize: int = int(1e4)
+gamma: float = 0.995
+tau: float = 0.005
+batch_size: int = 256
+learningStart: int = 1000
+actorLR: float = 3e-4
+criticLR: float = 3e-4
+optimizationInterval: int = 1
+stepInterval: int = 1
+checkpointInterval: int = 10000
 target_network_frequency: int = 1
 targetEntropy_scale: float = 0.9
-rewardScaling: float = 100
-
+rewardScaling: float = 1
+lossesPlotAveraging = 5
+rewardsPlotAveraging = 4
+graph = True
+resume = True
+saveCheckpoints = True
+checkpointToLoad = f"checkpoints\\Crawler-newRun-500000.pth"
+checkpointIDsubstring = "newRun"
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
@@ -38,21 +45,23 @@ torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = torch_deterministic
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)      # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
-# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)    # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)              # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
+env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8	# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
+# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+# env = UnityInterface("Builds\\Windows\\PushBlockImproved\\UnityEnvironment", seed=seed) # Good reward, -0.01 for step, 0.01 when moving block in xz plane, 5 for win
+# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)            # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)    # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds\\Windows\\Worm\\UnityEnvironment", seed=seed)
 
-# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                     # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)               # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                 # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                             # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return	# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                     # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
+# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)                       # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)               # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                         # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                 # 1D obs only, discrete action of size (3, 3, 3, 2)
 
-env = UnityInterface(None, seed=seed) 
+# env = UnityInterface(None, seed=seed) 	env = UnityInterface(None, seed=seed) 
 
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 
-totalAgentsCounts = 10000
+totalAgentsCounts = 0
 for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
 
@@ -90,6 +99,23 @@ for behavior in behaviorNames:
         alphaD[behavior] = logAlphaD[behavior].exp().item()
         alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR)
 
+    if resume:
+        checkpoint = torch.load(checkpointToLoad)
+        actor[behavior].load_state_dict(checkpoint["actor"])
+        actorOptimizer[behavior].load_state_dict(checkpoint["actorOptimizer"])
+        QFunction1[behavior].load_state_dict(checkpoint["QFunction1"])
+        QFunction2[behavior].load_state_dict(checkpoint["QFunction2"])
+        QFunction1Target[behavior].load_state_dict(checkpoint["QFunction1Target"])
+        QFunction2Target[behavior].load_state_dict(checkpoint["QFunction2Target"])
+        criticOptimizer[behavior].load_state_dict(checkpoint["criticOptimizer"])
+        if actor[behavior].usingContinuousActions:
+            logAlphaC[behavior] = checkpoint["logAlphaC"]
+            alphaC[behavior] = checkpoint["alphaC"]
+            alphaOptimizerC[behavior].load_state_dict(checkpoint["alphaOptimizerC"])
+        if actor[behavior].usingDiscreteActions:
+            logAlphaD[behavior] = checkpoint["logAlphaD"]
+            alphaD[behavior] = checkpoint["alphaD"]
+            alphaOptimizerD[behavior].load_state_dict(checkpoint["alphaOptimizerD"])
 
 # FIXME: Add actions buffer continuous and discrete and test 3DBall
 observationBuffer = [None] * totalAgentsCounts
@@ -98,73 +124,75 @@ for i in range(totalAgentsCounts):
 rewards = np.zeros(totalAgentsCounts)
 
 finalRewards, criticLosses, actorLosses, alphaLosses, alphasC, alphasD, QEvaluations, logProbs = [], [], [], [], [], [], [], []
-for globalStep in range(1, totalTimesteps+1):
-    for behavior in behaviorNames:
-        decisionSteps, terminalSteps = env.getSteps(behavior)
-        observationsThatNeedAction = []
-        for agent in decisionSteps:
-            observation = decisionSteps[agent].obs
-            observationsThatNeedAction.append(observation)
-            reward = decisionSteps[agent].reward * rewardScaling
-            lastObservation = observationBuffer[agent]
-            lastActionContinuous = actionsBuffer[agent]['continuous']
-            lastActionDiscrete = actionsBuffer[agent]['discrete']
-            if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
-                memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
-            observationBuffer[agent] = observation
-            rewards[agent] += reward
-            
-        for agent in terminalSteps:
-            observation = terminalSteps[agent].obs
-            reward = terminalSteps[agent].reward * rewardScaling
-            lastObservation = observationBuffer[agent]
-            lastActionContinuous = actionsBuffer[agent]['continuous']
-            lastActionDiscrete = actionsBuffer[agent]['discrete']
-            # Technically could skip the action None check. If lastObs exist, action does too
-            if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
-                memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
-                observationBuffer[agent] = None
-                actionsBuffer[agent]['continuous'] = None
-                actionsBuffer[agent]['discrete'] = None
-                # Save rewards only if we made an action before, otherwise the initial state was terminated state
+start = checkpoint["globalStep"] + 1 if resume else 1
+for globalStep in range(start - learningStart, start + totalTimesteps):
+    if globalStep % stepInterval == 0 or globalStep < learningStart:
+        for behavior in behaviorNames:
+            decisionSteps, terminalSteps = env.getSteps(behavior)
+            observationsThatNeedAction = []
+            for agent in decisionSteps:
+                observation = decisionSteps[agent].obs
+                observationsThatNeedAction.append(observation)
+                reward = decisionSteps[agent].reward * rewardScaling
+                lastObservation = observationBuffer[agent]
+                lastActionContinuous = actionsBuffer[agent]['continuous']
+                lastActionDiscrete = actionsBuffer[agent]['discrete']
+                if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None) and agent not in terminalSteps:
+                    memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
+                observationBuffer[agent] = observation
                 rewards[agent] += reward
-                # if rewards[agent] > 4 * rewardScaling:
-                #     print(f"Final reward: {rewards[agent]:>.2f}")
-            finalRewards.append(rewards[agent])
-            rewards[agent] = 0
+                
+            for agent in terminalSteps:
+                observation = terminalSteps[agent].obs
+                reward = terminalSteps[agent].reward * rewardScaling
+                lastObservation = observationBuffer[agent]
+                lastActionContinuous = actionsBuffer[agent]['continuous']
+                lastActionDiscrete = actionsBuffer[agent]['discrete']
+                # Technically could skip the action None check. If lastObs exist, action does too
+                if lastObservation != None and (lastActionContinuous != None or lastActionDiscrete != None):
+                    memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, True, observation)
+                    observationBuffer[agent] = None
+                    actionsBuffer[agent]['continuous'] = None
+                    actionsBuffer[agent]['discrete'] = None
+                    # Save rewards only if we made an action before, otherwise the initial state was terminated state
+                    rewards[agent] += reward
+                    # if rewards[agent] > 4 * rewardScaling:
+                    #     print(f"Final reward: {rewards[agent]:>.2f}")
+                finalRewards.append(rewards[agent])
+                rewards[agent] = 0
 
-        
-        behaviorActionsForThisStep = {}
-        specs = env.getSpecs(behavior)
-        nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
-        nrOfDiscreteActions = len(specs["DiscreteActions"])
-        behaviorActionsForThisStep["continuous"] = torch.zeros((len(decisionSteps), nrOfContinuousActions), requires_grad=False, dtype=torch.float32, device=device)
-        behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), requires_grad=False, dtype=torch.long, device=device)
-        # print(f"Allocated discrete action buffer of shape {behaviorActionsForThisStep['discrete'].shape}")
+            
+            behaviorActionsForThisStep = {}
+            specs = env.getSpecs(behavior)
+            nrOfContinuousActions = specs["ContinuousActions"] # TODO: Substitute it with actors[behavior].usingContinuousActions
+            nrOfDiscreteActions = len(specs["DiscreteActions"])
+            behaviorActionsForThisStep["continuous"] = torch.zeros((len(decisionSteps), nrOfContinuousActions), requires_grad=False, dtype=torch.float32, device=device)
+            behaviorActionsForThisStep["discrete"] = torch.zeros((len(decisionSteps), nrOfDiscreteActions), requires_grad=False, dtype=torch.long, device=device)
+            # print(f"Allocated discrete action buffer of shape {behaviorActionsForThisStep['discrete'].shape}")
 
-        # Batched pass to get actions  
-        if len(observationsThatNeedAction) > 0:
-            if actor[behavior].usingContinuousActions:
-                behaviorActionsForThisStep["continuous"], _ = actor[behavior].getContinuousAction(observationsThatNeedAction, withLogProbs=False)
-            if actor[behavior].usingDiscreteActions:
-                behaviorActionsForThisStep["discrete"], _, _ = actor[behavior].getDiscreteAction((observationsThatNeedAction), withLogProbs=False)
+            # Batched pass to get actions  
+            if len(observationsThatNeedAction) > 0:
+                if actor[behavior].usingContinuousActions:
+                    behaviorActionsForThisStep["continuous"], _ = actor[behavior].getContinuousAction(observationsThatNeedAction, withLogProbs=False)
+                if actor[behavior].usingDiscreteActions:
+                    behaviorActionsForThisStep["discrete"], _, _ = actor[behavior].getDiscreteAction((observationsThatNeedAction), withLogProbs=False)
 
-        # Transcribe the actions to buffer
-            for j, agent in enumerate(decisionSteps):
-                if nrOfContinuousActions > 0:
-                    actionsBuffer[agent]['continuous'] = behaviorActionsForThisStep['continuous'][j]
-                if nrOfDiscreteActions > 0:
-                    actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
+            # Transcribe the actions to buffer
+                for j, agent in enumerate(decisionSteps):
+                    if nrOfContinuousActions > 0:
+                        actionsBuffer[agent]['continuous'] = behaviorActionsForThisStep['continuous'][j]
+                    if nrOfDiscreteActions > 0:
+                        actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
 
-        # print(f"Setting Continuous actions: {behaviorActionsForThisStep}, Discrete actions: {behaviorActionsForThisStep}")
-        # print(f"Discrete action buffer shape before detachcpunumpy: {behaviorActionsForThisStep['discrete'].shape}")
-        # print(f"Discrete action buffer shape after detachcpunumpy: {behaviorActionsForThisStep['discrete'].detach().cpu().numpy().shape}")
-        env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'].detach().cpu().numpy())
-    env.step()
+            # print(f"Setting Continuous actions: {behaviorActionsForThisStep}, Discrete actions: {behaviorActionsForThisStep}")
+            # print(f"Discrete action buffer shape before detachcpunumpy: {behaviorActionsForThisStep['discrete'].shape}")
+            # print(f"Discrete action buffer shape after detachcpunumpy: {behaviorActionsForThisStep['discrete'].detach().cpu().numpy().shape}")
+            env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'].detach().cpu().numpy())
+        env.step()
     
     # ALGO LOGIC: training.
-    if globalStep > learning_starts:
-        if globalStep % update_frequency == 0:
+    if globalStep > start:
+        if globalStep % optimizationInterval == 0:
             data = memory[behavior].sample(batch_size)
             observationsBatch       =               data.observations
             actionsContinuousBatch  =               torch.stack(data.actionsContinuous) if actor[behavior].usingContinuousActions else None
@@ -222,16 +250,14 @@ for globalStep in range(1, totalTimesteps+1):
 
             # #################### ALPHA UPDATE
             if actor[behavior].usingContinuousActions:
-                _, logProbabilitiesC = actor[behavior].getContinuousAction(observationsBatch)
-                alphaLossC = (-logAlphaC[behavior].exp()*((logProbabilitiesC.to(device) + targetEntropyC[behavior]).detach())).mean()
+                alphaLossC = (-logAlphaC[behavior].exp()*((stateLogProbsContinuous.to(device) + targetEntropyC[behavior]).detach())).mean()
                 alphaOptimizerC[behavior].zero_grad()
                 alphaLossC.backward()
                 alphaOptimizerC[behavior].step()
                 alphaC[behavior] = logAlphaC[behavior].exp().item()
 
             if actor[behavior].usingDiscreteActions:
-                _, logProbabilitiesD, probsD = actor[behavior].getDiscreteAction(observationsBatch)
-                alphaLossD = (probsD.detach()*(-logAlphaD[behavior].exp()*(logProbabilitiesD.to(device) + targetEntropyD[behavior]).detach())).mean()
+                alphaLossD = (stateProbsDiscrete.detach()*(-logAlphaD[behavior].exp()*(stateLogProbsDiscrete.to(device) + targetEntropyD[behavior]).detach())).mean()
                 alphaOptimizerD[behavior].zero_grad()
                 alphaLossD.backward()
                 alphaOptimizerD[behavior].step()
@@ -246,58 +272,121 @@ for globalStep in range(1, totalTimesteps+1):
                 for param, targetParam in zip(QFunction2[behavior].parameters(), QFunction2Target[behavior].parameters()):
                     targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
 
-            if globalStep % 200 == 0:
-                print(f"Step {globalStep}, Actor loss: {actorLoss:>8.4f}, QF loss: {criticLoss:>8.4f}")
+            if globalStep % 1000 == 0:
+                print(f"Step {behavior[:behavior.find('?')]} {globalStep:8}, Actor loss: {actorLoss:>12.4f}, QF loss: {criticLoss:>12.4f}")
 
-
-            if globalStep % 1 == 0:
+            if globalStep % 10 == 0:
                 criticLosses.append(criticLoss)
                 actorLosses.append(actorLoss)
                 alphasC.append(alphaC[behavior])
                 alphasD.append(alphaD[behavior])
                 QEvaluations.append(minQEvaluation.mean())
                 logProbs.append((stateProbsDiscrete * (stateLogProbsContinuous + stateLogProbsDiscrete)).mean())
+                
+            if globalStep % checkpointInterval == 0 and saveCheckpoints:
+                for behavior in behaviorNames:
+                    checkpoint = {
+                        'actor': actor[behavior].state_dict(),
+                        'actorOptimizer': actorOptimizer[behavior].state_dict(),
+                        'QFunction1': QFunction1[behavior].state_dict(),
+                        'QFunction2': QFunction2[behavior].state_dict(),
+                        'QFunction1Target': QFunction1Target[behavior].state_dict(),
+                        'QFunction2Target': QFunction2Target[behavior].state_dict(),
+                        'criticOptimizer': criticOptimizer[behavior].state_dict(),
+                        'globalStep': globalStep,
+                    }
+                    if actor[behavior].usingContinuousActions:
+                        checkpoint["logAlphaC"] = logAlphaC[behavior]
+                        checkpoint["alphaC"] = alphaC[behavior]
+                        checkpoint["alphaOptimizerC"] = alphaOptimizerC[behavior].state_dict()
+                    if actor[behavior].usingDiscreteActions:
+                        checkpoint["logAlphaD"] = logAlphaD[behavior]
+                        checkpoint["alphaD"] = alphaD[behavior]
+                        checkpoint["alphaOptimizerD"] = alphaOptimizerD[behavior].state_dict()
+
+                    torch.save(checkpoint, f"checkpoints\\{behavior[:behavior.find('?')]}-{checkpointIDsubstring}-{globalStep}.pth")
+
+                    if graph:
+                        beginning = 0
+                        dif = ((len(criticLosses) - beginning) % lossesPlotAveraging) + lossesPlotAveraging
+
+                        # Style
+                        plt.style.use('seaborn-v0_8-bright')
+
+                        fig, (ax1, ax2) = plt.subplots(2, 1)
+                        fig.set_size_inches(25.6, 14.4)
+
+                        ax1.plot(torch.tensor(actorLosses[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="actor loss")
+                        ax1.plot(torch.tensor(alphaLosses[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="alpha loss")
+                        ax1.plot(torch.tensor(alphasC[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="alphaC")
+                        ax1.plot(torch.tensor(alphasD[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="alphaD")
+                        ax1.plot(torch.tensor(QEvaluations[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="batch evaluation")
+                        ax1.plot(torch.tensor(logProbs[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="logprobs")
+                        ax1.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=3, fancybox=True, shadow=True).set_zorder(2)
+                        ax1b = ax1.twinx()
+                        ax1b.plot(torch.tensor(criticLosses[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), 'm-', label="critic loss")
+                        ax1b.set_ylabel("Critic Loss Value", color='m')
+                        ax1b.tick_params(axis='y')
+                        plt.gca().set_yscale('log')
+
+                        ax1.set_title(f"{behavior[:behavior.find('?')]} {checkpointIDsubstring} {start-1} - {globalStep}")
+                        ax1.set_xlabel(f"Iterations / {lossesPlotAveraging*10}")
+                        ax1.set_ylabel("Value")
+                        ax1.grid(True, linestyle='--', alpha=0.5)
+
+
+                        dif_rewards = ((len(finalRewards) - beginning) % rewardsPlotAveraging) + rewardsPlotAveraging
+                        ax2.plot(torch.tensor(finalRewards[beginning:-dif_rewards]).view(-1, rewardsPlotAveraging).mean(-1))
+                        ax2.set_title("Final Rewards")
+                        ax2.set_xlabel(f"Episode")
+                        ax2.set_ylabel("Reward")
+                        
+                        ax2.grid(True, linestyle='--', alpha=0.5)
+
+                        plt.legend()
+                        plt.tight_layout()
+                        plt.savefig(f"graphs\\{behavior[:behavior.find('?')]}-{checkpointIDsubstring}-{globalStep}", bbox_inches='tight')
+                        plt.close('all')
+                
 env.close()
 
-
 if graph:
-    averagingNr = 1
-    beginning = 1
-    dif = ((len(criticLosses) - beginning) % averagingNr) + averagingNr
+    beginning = 0
+    dif = ((len(criticLosses) - beginning) % lossesPlotAveraging) + lossesPlotAveraging
 
     # Style
     plt.style.use('seaborn-v0_8-bright')
 
     fig, (ax1, ax2) = plt.subplots(2, 1)
+    fig.set_size_inches(25.6, 14.4)
 
-    ax1.plot(torch.tensor(actorLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), label="actor loss")
-    ax1.plot(torch.tensor(alphaLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alpha loss")
-    ax1.plot(torch.tensor(alphasC[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alphaC")
-    ax1.plot(torch.tensor(alphasD[beginning:-dif]).view(-1, averagingNr).mean(-1), label="alphaD")
-    ax1.plot(torch.tensor(QEvaluations[beginning:-dif]).view(-1, averagingNr).mean(-1), label="batch evaluation")
-    ax1.plot(torch.tensor(logProbs[beginning:-dif]).view(-1, averagingNr).mean(-1), label="logprobs")
-    ax1.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=3, fancybox=True, shadow=True)
+    ax1.plot(torch.tensor(actorLosses[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="actor loss")
+    ax1.plot(torch.tensor(alphaLosses[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="alpha loss")
+    ax1.plot(torch.tensor(alphasC[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="alphaC")
+    ax1.plot(torch.tensor(alphasD[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="alphaD")
+    ax1.plot(torch.tensor(QEvaluations[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="batch evaluation")
+    ax1.plot(torch.tensor(logProbs[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), label="logprobs")
+    ax1.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=3, fancybox=True, shadow=True).set_zorder(2)
     ax1b = ax1.twinx()
-    ax1b.plot(torch.tensor(criticLosses[beginning:-dif]).view(-1, averagingNr).mean(-1), 'm-', label="critic loss")
+    ax1b.plot(torch.tensor(criticLosses[beginning:-dif]).view(-1, lossesPlotAveraging).mean(-1), 'm-', label="critic loss")
     ax1b.set_ylabel("Critic Loss Value", color='m')
     ax1b.tick_params(axis='y')
     plt.gca().set_yscale('log')
 
-    ax1.set_title("SAC multidiscrete 500 steps basic env")
-    ax1.set_xlabel(f"Iterations / {averagingNr}")
-    ax1.set_ylabel("Value")
+    ax1.set_title(f"{behavior[:behavior.find('?')]} {checkpointIDsubstring} {start-1} - {globalStep}")
+    ax1.set_xlabel(f"Iterations / {lossesPlotAveraging}")
+    ax1.set_ylabel(f"Value (avg of {lossesPlotAveraging})")
     ax1.grid(True, linestyle='--', alpha=0.5)
 
 
-    averagingNrR = 1
-    dif_rewards = ((len(finalRewards) - beginning) % averagingNrR) + averagingNrR
-    ax2.plot(torch.tensor(finalRewards[beginning:-dif_rewards]).view(-1, averagingNrR).mean(-1))
+    dif_rewards = ((len(finalRewards) - beginning) % rewardsPlotAveraging) + rewardsPlotAveraging
+    ax2.plot(torch.tensor(finalRewards[beginning:-dif_rewards]).view(-1, rewardsPlotAveraging).mean(-1))
     ax2.set_title("Final Rewards")
     ax2.set_xlabel(f"Episode")
-    ax2.set_ylabel("Reward")
+    ax2.set_ylabel(f"Reward (avg of {rewardsPlotAveraging})")
     ax2.grid(True, linestyle='--', alpha=0.5)
-
     plt.legend()
     plt.tight_layout()
-    # plt.subplots_adjust(left=0.076, right=0.922, bottom=0.11, top=0.95, hspace=0.487)
+    plt.subplots_adjust(left=0.04, right=0.96, bottom=0.056, hspace=0.23)
+    # plt.subplot_tool()
     plt.show()

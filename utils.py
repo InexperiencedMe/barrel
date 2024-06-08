@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
+from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
+from mlagents_envs.side_channel.environment_parameters_channel import EnvironmentParametersChannel
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
@@ -15,7 +17,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class UnityInterface():
     def __init__(self, envName, seed):
-        self.env = UnityEnvironment(file_name=envName, seed=seed)
+        self.channelEnvironment = EnvironmentParametersChannel()
+        self.channelEngine = EngineConfigurationChannel()
+        self.env = UnityEnvironment(file_name=envName, seed=seed, side_channels=[self.channelEnvironment, self.channelEngine])
         self.env.reset()
         self.behaviorNames = list(self.env.behavior_specs)
         self.specs = self.prepareSpecs()
@@ -136,19 +140,19 @@ class QNetwork(nn.Module):
         if self.using1Dobs:
             self.preCritic1DoutputSize = 256
             self.preCritic1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 512), nn.ReLU(),
-                nn.Linear(512, self.preCritic1DoutputSize), nn.ReLU())
+                nn.Linear(self.obsSize1D, 512), nn.Tanh(),
+                nn.Linear(512, self.preCritic1DoutputSize), nn.Tanh())
         
         if self.using3Dobs:
             self.preCritic3D = nn.Sequential(
-                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.ReLU(),
-                nn.Conv2d(16, 32, 5, stride=2), nn.ReLU(),
-                nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
+                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
+                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
+                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
             with torch.no_grad():
                 self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 128),
-                                         nn.ReLU(), nn.Linear(128, self.outputSize))
+        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 256),
+                                         nn.Tanh(), nn.Linear(256, self.outputSize))
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
@@ -195,7 +199,7 @@ class QNetwork(nn.Module):
 #         self.tau = 0.005
 
 LOG_STD_MAX = 2
-LOG_STD_MIN = -10
+LOG_STD_MIN = -5
 
 class SAC(nn.Module):
     # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
@@ -218,28 +222,28 @@ class SAC(nn.Module):
         if self.using1Dobs:      
             self.preActor1DoutputSize = 256
             self.preActor1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 512), nn.ReLU(),
-                nn.Linear(512, self.preActor1DoutputSize), nn.ReLU())
+                nn.Linear(self.obsSize1D, 512), nn.Tanh(),
+                nn.Linear(512, self.preActor1DoutputSize), nn.Tanh())
             
         if self.using3Dobs:
             self.preActor3D = nn.Sequential(
-                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.ReLU(),
-                nn.Conv2d(16, 32, 5, stride=2), nn.ReLU(),
-                nn.Conv2d(32, 32, 3, stride=1), nn.ReLU(), nn.Flatten())
+                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
+                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
+                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
         if self.usingContinuousActions:
             self.actorContinuous = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.ReLU(),
-                nn.Linear(128, self.continuousActionSize))        
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
+                nn.Linear(256, self.continuousActionSize))        
             self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
             self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
             self.register_buffer("continuousActionBias", torch.tensor((continuousActionHighBound + continuousActionLowBound) / 2.0, dtype=torch.float32))
 
         if self.usingDiscreteActions:
             self.actorDiscrete = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 128), nn.ReLU(),
-                nn.Linear(128, sum(self.envSpecs["DiscreteActions"])))
+                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
+                nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
             # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
         
     # TODO: not handling action masks yet
@@ -289,7 +293,7 @@ class SAC(nn.Module):
         observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd(observationFeatures)
-        actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1)  # From SpinUp. Keeps bounds transforming range -1:1 to min:max
+        actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1) # Keeps bounds transforming range -1:1 to min:max
         actionStd = actionLogStd.exp()
         distribution = Normal(actionMean, actionStd)
         if evaluation == True:
