@@ -10,20 +10,20 @@ from utils import *
 
 # TODO: If I substituted every dictionary usage with named_tuple, would that be much faster and worth the effort?
 
-seed: int = 484
+seed: int = 785
 torch_deterministic: bool = True
 totalTimesteps: int = 500000
 bufferSize: int = int(1e4)
 gamma: float = 0.995
 tau: float = 0.005
-batch_size: int = 256
-learningStart: int = 1000
+batchSize: int = 128
+learningStart: int = 400
 actorLR: float = 3e-4
 criticLR: float = 3e-4
 optimizationInterval: int = 1
-stepInterval: int = 1
+stepInterval: int = 8
 checkpointInterval: int = 10000
-target_network_frequency: int = 1
+softCriticUpdateInterval: int = 1
 targetEntropy_scale: float = 0.9
 rewardScaling: float = 1
 lossesPlotAveraging = 5
@@ -31,7 +31,7 @@ rewardsPlotAveraging = 4
 graph = True
 resume = True
 saveCheckpoints = True
-checkpointToLoad = f"checkpoints\\Crawler-newRun-500000.pth"
+checkpointToLoad = f"checkpoints\\Crawler-newRun-1600000.pth"
 checkpointIDsubstring = "newRun"
 
 def layer_init(layer, bias_const=0.0):
@@ -56,7 +56,7 @@ env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)   
 # env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)                       # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)               # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
 # env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                         # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                 # 1D obs only, discrete action of size (3, 3, 3, 2)
 
-# env = UnityInterface(None, seed=seed) 	env = UnityInterface(None, seed=seed) 
+# env = UnityInterface(None, seed=seed)
 
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
@@ -72,14 +72,14 @@ targetEntropyD, logAlphaD, alphaD, alphaOptimizerD = {}, {}, {}, {}
 for behavior in behaviorNames:
     envSpecs = env.getSpecs(behavior)
     actor[behavior] = SAC(envSpecs).to(device)
-    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR)
+    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-4, amsgrad=True)
     QFunction1[behavior] = QNetwork(envSpecs).to(device)
     QFunction2[behavior] = QNetwork(envSpecs).to(device)
     QFunction1Target[behavior] = QNetwork(envSpecs).to(device)
     QFunction2Target[behavior] = QNetwork(envSpecs).to(device)
     QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
     QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
-    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR)
+    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-4, amsgrad=True)
     
     memory[behavior] = Memory(bufferSize)
     assert actor[behavior].usingContinuousActions or actor[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
@@ -90,14 +90,14 @@ for behavior in behaviorNames:
         targetEntropyC[behavior] = -targetEntropy_scale * torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
         logAlphaC[behavior] = torch.zeros(1, requires_grad=True, device=device)
         alphaC[behavior] = logAlphaC[behavior].exp().item()
-        alphaOptimizerC[behavior] = optim.Adam([logAlphaC[behavior]], lr=criticLR)
+        alphaOptimizerC[behavior] = optim.Adam([logAlphaC[behavior]], lr=criticLR, eps=1e-4, amsgrad=True)
         
     alphaD[behavior] = torch.tensor((0), dtype=torch.float, device=device)
     if actor[behavior].usingDiscreteActions:
         targetEntropyD[behavior] = -targetEntropy_scale * torch.log(1 / torch.tensor(env.getSpecs(behavior)["DiscreteActions"]).prod().to(device))
         logAlphaD[behavior] = torch.zeros(1, requires_grad=True, device=device)
         alphaD[behavior] = logAlphaD[behavior].exp().item()
-        alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR)
+        alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR, eps=1e-4, amsgrad=True)
 
     if resume:
         checkpoint = torch.load(checkpointToLoad)
@@ -126,7 +126,7 @@ rewards = np.zeros(totalAgentsCounts)
 finalRewards, criticLosses, actorLosses, alphaLosses, alphasC, alphasD, QEvaluations, logProbs = [], [], [], [], [], [], [], []
 start = checkpoint["globalStep"] + 1 if resume else 1
 for globalStep in range(start - learningStart, start + totalTimesteps):
-    if globalStep % stepInterval == 0 or globalStep < learningStart:
+    if globalStep % stepInterval == 0 or globalStep < start:
         for behavior in behaviorNames:
             decisionSteps, terminalSteps = env.getSteps(behavior)
             observationsThatNeedAction = []
@@ -193,7 +193,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
     # ALGO LOGIC: training.
     if globalStep > start:
         if globalStep % optimizationInterval == 0:
-            data = memory[behavior].sample(batch_size)
+            data = memory[behavior].sample(batchSize)
             observationsBatch       =               data.observations
             actionsContinuousBatch  =               torch.stack(data.actionsContinuous) if actor[behavior].usingContinuousActions else None
             actionsDiscreteBatch    =               torch.stack(data.actionsDiscrete) if actor[behavior].usingDiscreteActions else None
@@ -266,7 +266,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
 
 
             # update the target networks
-            if globalStep % target_network_frequency == 0:
+            if globalStep % softCriticUpdateInterval == 0:
                 for param, targetParam in zip(QFunction1[behavior].parameters(), QFunction1Target[behavior].parameters()):
                     targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
                 for param, targetParam in zip(QFunction2[behavior].parameters(), QFunction2Target[behavior].parameters()):
@@ -331,7 +331,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
 
                         ax1.set_title(f"{behavior[:behavior.find('?')]} {checkpointIDsubstring} {start-1} - {globalStep}")
                         ax1.set_xlabel(f"Iterations / {lossesPlotAveraging*10}")
-                        ax1.set_ylabel("Value")
+                        ax1.set_ylabel(f"Value (avg of {lossesPlotAveraging})")
                         ax1.grid(True, linestyle='--', alpha=0.5)
 
 
@@ -339,7 +339,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                         ax2.plot(torch.tensor(finalRewards[beginning:-dif_rewards]).view(-1, rewardsPlotAveraging).mean(-1))
                         ax2.set_title("Final Rewards")
                         ax2.set_xlabel(f"Episode")
-                        ax2.set_ylabel("Reward")
+                        ax2.set_ylabel(f"Reward (avg of {rewardsPlotAveraging})")
                         
                         ax2.grid(True, linestyle='--', alpha=0.5)
 

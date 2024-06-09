@@ -14,8 +14,8 @@ seed: int = 1
 torch_deterministic: bool = True
 totalTimesteps: int = 1000
 graph = True
-checkpointName = f"checkpoints\\Crawler-newRun-800000.pth"
-# checkpointName = f"checkpoints\\SmallWallJump-40000.pth"
+# checkpointName = f"checkpoints\\3DBallHard-mainBranch-100000.pth"
+checkpointName = f"checkpoints\\Crawler-newRun-1820000.pth"
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
