@@ -306,7 +306,7 @@ class SAC(nn.Module):
         
         if withLogProbs:
             logProbs = distribution.log_prob(actionSample)
-            logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-6)#.sum(-1, keepdim=True) # CleanRL version
+            logProbs -= torch.log(self.continuousActionScale * (1 - actionSampleTanh.pow(2)) + 1e-5)#.sum(-1, keepdim=True) # CleanRL version
             logProbs = logProbs.sum(-1).view(-1)
             # print(f"returning continuous logprobs of shape {logProbs.shape}")
         else:

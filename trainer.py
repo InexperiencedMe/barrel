@@ -10,29 +10,29 @@ from utils import *
 
 # TODO: If I substituted every dictionary usage with named_tuple, would that be much faster and worth the effort?
 
-seed: int = 785
+seed: int = 1
 torch_deterministic: bool = True
-totalTimesteps: int = 500000
+totalTimesteps: int = 220000
 bufferSize: int = int(1e4)
-gamma: float = 0.995
+gamma: float = 0.98
 tau: float = 0.005
 batchSize: int = 128
-learningStart: int = 400
+learningStart: int = 2000
 actorLR: float = 3e-4
 criticLR: float = 3e-4
 optimizationInterval: int = 1
-stepInterval: int = 8
-checkpointInterval: int = 10000
+stepInterval: int = 4
 softCriticUpdateInterval: int = 1
 targetEntropy_scale: float = 0.9
-rewardScaling: float = 1
+rewardScaling: float = 10
 lossesPlotAveraging = 5
-rewardsPlotAveraging = 4
+rewardsPlotAveraging = 1
 graph = True
 resume = True
 saveCheckpoints = True
-checkpointToLoad = f"checkpoints\\Crawler-newRun-1600000.pth"
-checkpointIDsubstring = "newRun"
+checkpointInterval: int = 10000
+checkpointToLoad = f"checkpoints\\PushBlock-HOPE-880000.pth"
+checkpointIDsubstring = "HOPE"
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
@@ -46,8 +46,9 @@ torch.backends.cudnn.deterministic = torch_deterministic
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)              # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8	# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
+# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8	# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
 # env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+env = UnityInterface("Builds\\Windows\\PushBlockMov\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
 # env = UnityInterface("Builds\\Windows\\PushBlockImproved\\UnityEnvironment", seed=seed) # Good reward, -0.01 for step, 0.01 when moving block in xz plane, 5 for win
 # env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)            # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)    # 1D obs only, discrete action of size (3, 3, 3, 2)
 # env = UnityInterface("Builds\\Windows\\Worm\\UnityEnvironment", seed=seed)
@@ -72,14 +73,14 @@ targetEntropyD, logAlphaD, alphaD, alphaOptimizerD = {}, {}, {}, {}
 for behavior in behaviorNames:
     envSpecs = env.getSpecs(behavior)
     actor[behavior] = SAC(envSpecs).to(device)
-    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-4, amsgrad=True)
+    actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-5)
     QFunction1[behavior] = QNetwork(envSpecs).to(device)
     QFunction2[behavior] = QNetwork(envSpecs).to(device)
     QFunction1Target[behavior] = QNetwork(envSpecs).to(device)
     QFunction2Target[behavior] = QNetwork(envSpecs).to(device)
     QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
     QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
-    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-4, amsgrad=True)
+    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-5)
     
     memory[behavior] = Memory(bufferSize)
     assert actor[behavior].usingContinuousActions or actor[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
@@ -90,14 +91,14 @@ for behavior in behaviorNames:
         targetEntropyC[behavior] = -targetEntropy_scale * torch.tensor(env.getSpecs(behavior)["ContinuousActions"]).to(device)
         logAlphaC[behavior] = torch.zeros(1, requires_grad=True, device=device)
         alphaC[behavior] = logAlphaC[behavior].exp().item()
-        alphaOptimizerC[behavior] = optim.Adam([logAlphaC[behavior]], lr=criticLR, eps=1e-4, amsgrad=True)
+        alphaOptimizerC[behavior] = optim.Adam([logAlphaC[behavior]], lr=criticLR, eps=1e-5)
         
     alphaD[behavior] = torch.tensor((0), dtype=torch.float, device=device)
     if actor[behavior].usingDiscreteActions:
         targetEntropyD[behavior] = -targetEntropy_scale * torch.log(1 / torch.tensor(env.getSpecs(behavior)["DiscreteActions"]).prod().to(device))
         logAlphaD[behavior] = torch.zeros(1, requires_grad=True, device=device)
         alphaD[behavior] = logAlphaD[behavior].exp().item()
-        alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR, eps=1e-4, amsgrad=True)
+        alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR, eps=1e-5)
 
     if resume:
         checkpoint = torch.load(checkpointToLoad)
@@ -141,6 +142,8 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                     memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
                 observationBuffer[agent] = observation
                 rewards[agent] += reward
+                if reward > 3:
+                    print(f"D agent {agent} scored a goal. final reward: {rewards[agent]}")
                 
             for agent in terminalSteps:
                 observation = terminalSteps[agent].obs
@@ -226,6 +229,8 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
             criticLoss = QFunction1Loss + QFunction2Loss
             criticOptimizer[behavior].zero_grad()
             criticLoss.backward()
+            torch.nn.utils.clip_grad_norm_(QFunction1[behavior].parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(QFunction2[behavior].parameters(), max_norm=1.0)
             criticOptimizer[behavior].step()
 
 
@@ -244,6 +249,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
             actorLoss = (stateProbsDiscrete * ((alphaC[behavior]*stateLogProbsContinuous + alphaD[behavior]*stateLogProbsDiscrete) - minQEvaluation)).mean()
             actorOptimizer[behavior].zero_grad()
             actorLoss.backward()
+            torch.nn.utils.clip_grad_norm_(actor[behavior].parameters(), max_norm=1.0)
             actorOptimizer[behavior].step()
 
 

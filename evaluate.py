@@ -10,12 +10,14 @@ from utils import *
 
 # TODO: If I substituted every dictionary usage with named_tuple, would that be much faster and worth the effort?
 
-seed: int = 1
+seed: int = 2
 torch_deterministic: bool = True
-totalTimesteps: int = 1000
-graph = True
+totalTimesteps: int = 200
+graph = False
 # checkpointName = f"checkpoints\\3DBallHard-mainBranch-100000.pth"
-checkpointName = f"checkpoints\\Crawler-newRun-1820000.pth"
+# checkpointName = f"checkpoints\\Worm-newRun-2000000.pth"
+checkpointName = f"checkpoints\\PushBlock-mod-700000.pth"
+# checkpointName = f"checkpoints\\Crawler stable-50000.pth"
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
@@ -72,6 +74,8 @@ for globalStep in range(1, totalTimesteps+1):
             reward = decisionSteps[agent].reward
             observationBuffer[agent] = observation
             rewards[agent] += reward
+            # if agent == 0:
+            #     print(f"Agent 0 got reward: {reward}")
             
         for agent in terminalSteps:
             observation = terminalSteps[agent].obs
