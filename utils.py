@@ -12,6 +12,7 @@ from collections import deque, namedtuple
 import random
 from itertools import product
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from torch.nn import Parameter
 
 # TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
 
@@ -98,13 +99,17 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
+# NOTE: VERY IMPORTANT: This might be the bigest slowdown in the program. Try Unwrapping the observations and deal with them together. Dont go one by one and check each element 
 # In Unity they have observation components that we have to deal with.
 # Observations come as tuple of ndarrays of either 1D or 3D, I simply concatenate it into one of each type
 def processObservations(x):
+    # print(f"processObservations: x: {x}")
     allObs1D, allObs3D = [], []
     for observation in x:
+        # print(f"processObservations: observation: {observation}")
         obs1D, obs3D = [], []
         for observationElement in observation:
+            # print(f"processObservations: observationElement: {observationElement}")
             observationElement = torch.tensor(observationElement)
             if observationElement.ndim == 1:
                 obs1D.append(observationElement)
@@ -248,10 +253,15 @@ class SAC(nn.Module):
         
     # TODO: not handling action masks yet
     # TODO: Should combine the 2 action types and return empty action if not needed
-    def getDiscreteAction(self, x, action=None, withLogProbs=True):
-        obs1D, obs3D = processObservations(x)
-        observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+    def getDiscreteAction(self, x, action=None, withLogProbs=True, mask=torch.tensor([1], device=device), processObs=True):
+        if processObs:
+            obs1D, obs3D = processObservations(x)
+            observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+        else:
+            observationFeatures = self.getObservationFeaturesForActor(x, x)
+
         unsplitLogits = self.actorDiscrete(observationFeatures)
+        unsplitLogits = torch.mul(unsplitLogits, mask)
         splitLogits = torch.split(unsplitLogits, list(self.envSpecs["DiscreteActions"]), dim=-1)
         actionDistributions = [Categorical(logits=logits) for logits in splitLogits]
         if action is None:
@@ -339,3 +349,20 @@ class Memory(object):
     def __len__(self):
         return len(self.memory)
     
+
+class WrapperNet(torch.nn.Module):
+    def __init__(self, actor, envSpecs):
+        super(WrapperNet, self).__init__()
+        self.actor = actor
+        self.version_number = Parameter(torch.Tensor([3]), requires_grad=False)
+        self.memory_size = Parameter(torch.Tensor([0]), requires_grad=False)
+        output_shape = torch.Tensor(envSpecs["DiscreteActions"])
+        self.discrete_shape = Parameter(output_shape, requires_grad=False)
+
+
+    def forward(self, x1, x2, mask):
+        # print(f"x1: {x1}, x2: {x2}")
+        x = torch.cat((x1, x2), -1).to(device)
+        # print(f"x: {x}")
+        action, _, _ = self.actor.getDiscreteAction(x, mask=mask, processObs=False, withLogProbs=False)
+        return action, self.discrete_shape, self.version_number, self.memory_size
