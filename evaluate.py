@@ -18,7 +18,8 @@ saveOnnx = True
 onnxNameSuffix = "gen 1 corner overtrained"
 # checkpointName = f"checkpoints\\3DBallHard-mainBranch-100000.pth"
 # checkpointName = f"checkpoints\\Worm-newRun-2000000.pth"
-checkpointName = f"checkpoints\\3DBall--50000.pth"
+# checkpointName = f"checkpoints\\3DBall--50000.pth"
+checkpointName = f"checkpoints\\PushBlock-mod-800000.pth"
 # checkpointName = f"checkpoints\\Crawler stable-50000.pth"
 
 def layer_init(layer, bias_const=0.0):

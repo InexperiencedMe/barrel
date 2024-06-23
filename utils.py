@@ -350,11 +350,12 @@ class WrapperNet(torch.nn.Module):
         self.actor = actor
         self.version_number = Parameter(torch.Tensor([3]), requires_grad=False)
         self.memory_size = Parameter(torch.Tensor([0]), requires_grad=False)
-        self.discrete_shape = Parameter(torch.Tensor(envSpecs["DiscreteActions"]), requires_grad=False)
-        self.continuous_shape = Parameter(torch.Tensor(envSpecs["ContinuousActions"]), requires_grad=False)
+        self.discrete_shape = Parameter(torch.Tensor([envSpecs["DiscreteActions"]]), requires_grad=False)
+        self.continuous_shape = Parameter(torch.Tensor([envSpecs["ContinuousActions"]]), requires_grad=False)
 
 
-    def forward(self, *args, mask=torch.tensor(1, device=device)):
+    def forward(self, *args):
+        print(f"Args: {args}")
         obs1D, obs3D = [], []
         if self.actor.usingDiscreteActions:
             mask = args[-1]
@@ -371,13 +372,14 @@ class WrapperNet(torch.nn.Module):
         x = (torch.cat(obs1D, -1).to(device) if obs1D else None, torch.cat(obs3D, -1).to(device) if obs3D else None)
 
         if self.actor.usingContinuousActions and self.actor.usingDiscreteActions:
-            actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False)
+            actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False, evaluation=True)
             actionD, _, _ = self.actor.getDiscreteAction(x, processObs=False, withLogProbs=False, mask=mask)
             return actionC, self.continuous_shape, actionD, self.discrete_shape, self.version_number, self.memory_size
         
         if self.actor.usingContinuousActions:
             print(f"We're here in only C branch getting action")
-            actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False)
+            actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False, evaluation=True)
+            print(f"We return: {(actionC, self.continuous_shape, self.version_number, self.memory_size)}")
             return actionC, self.continuous_shape, self.version_number, self.memory_size
         
         if self.actor.usingDiscreteActions:
@@ -403,7 +405,7 @@ def exportONNX(filename, actor, envSpecs):
         outputNames.extend(["discrete_actions", "discrete_action_output_shape"])
     outputNames.extend(["version_number", "memory_size"])
     
-    print(f"{outputNames}")
+    print(f"Output names: {outputNames}")
 
     dynamicAxes = {name: {0: 'batch'} for name in inputNames}
     # Export the model
