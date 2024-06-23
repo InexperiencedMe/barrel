@@ -14,9 +14,11 @@ seed: int = 2
 torch_deterministic: bool = True
 totalTimesteps: int = 100
 graph = False
+saveOnnx = True
+onnxNameSuffix = "gen 1 corner overtrained"
 # checkpointName = f"checkpoints\\3DBallHard-mainBranch-100000.pth"
 # checkpointName = f"checkpoints\\Worm-newRun-2000000.pth"
-checkpointName = f"checkpoints\\PushBlock-mod-700000.pth"
+checkpointName = f"checkpoints\\3DBall--50000.pth"
 # checkpointName = f"checkpoints\\Crawler stable-50000.pth"
 
 def layer_init(layer, bias_const=0.0):
@@ -83,6 +85,8 @@ for globalStep in range(1, totalTimesteps+1):
             observation = terminalSteps[agent].obs
             reward = terminalSteps[agent].reward
             finalRewards.append(rewards[agent])
+            # if agent == 0:
+            #     print(f"Agent 0 got terminal reward: {reward}")
             rewards[agent] = 0
 
         
@@ -117,21 +121,6 @@ if graph:
     plt.tight_layout()
     plt.show()
 
-
-for behavior in behaviorNames:
-    # actor[behavior].eval()
-    torch.onnx.export(
-    WrapperNet(actor[behavior], envSpecs),
-    (torch.randn((1,105), device=device), torch.randn((1,105), device=device), torch.ones(1, len(envSpecs["DiscreteActions"]), device=device)),
-    f"{behavior[:behavior.find('?')]}.onnx",
-    opset_version=13,
-    input_names=["obs_0", "obs_1", "action_masks"],
-    output_names=["discrete_actions", "discrete_action_output_shape",
-                  "version_number", "memory_size"],
-    dynamic_axes={'obs_0': {0: 'batch'},
-                  'obs_1': {0: 'batch'},
-                  'action_masks': {0: 'batch'},
-                  'discrete_actions': {0: 'batch'},
-                  'discrete_action_output_shape': {0: 'batch'}
-                 }
-    )
+if saveOnnx:
+    for behavior in behaviorNames:
+        exportONNX(f"onnx\\{behavior[:behavior.find('?')]} {onnxNameSuffix}", actor[behavior], env.getSpecs(behavior))

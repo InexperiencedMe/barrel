@@ -126,6 +126,7 @@ def processObservations(x):
     final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, dtype=torch.float32, device=device)
     return final1D, final3D
 
+
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
         super(QNetwork, self).__init__()
@@ -192,17 +193,6 @@ class QNetwork(nn.Module):
         features = torch.cat(featuresList, -1)
         return features
 
-# class SoftQNetwork():
-#     def __init__(self, envSpecs, criticLR):
-#         self.QFunction1 = QNetwork(envSpecs).to(device)
-#         self.QFunction2 = QNetwork(envSpecs).to(device)
-#         self.QFunction1Target = QNetwork(envSpecs).to(device)
-#         self.QFunction2Target = QNetwork(envSpecs).to(device)
-#         self.QFunction1Target.load_state_dict(self.QFunction1.state_dict())
-#         self.QFunction2Target.load_state_dict(self.QFunction2.state_dict())
-#         self.criticOptimizer = optim.Adam(list(self.QFunction1.parameters()) + list(self.QFunction2.parameters()), lr=criticLR, eps=1e-4)
-#         self.tau = 0.005
-
 LOG_STD_MAX = 2
 LOG_STD_MIN = -5
 
@@ -258,7 +248,7 @@ class SAC(nn.Module):
             obs1D, obs3D = processObservations(x)
             observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
         else:
-            observationFeatures = self.getObservationFeaturesForActor(x, x)
+            observationFeatures = self.getObservationFeaturesForActor(x[0], x[1])
 
         unsplitLogits = self.actorDiscrete(observationFeatures)
         unsplitLogits = torch.mul(unsplitLogits, mask)
@@ -298,9 +288,13 @@ class SAC(nn.Module):
         
         return action.T, finalLogProbs, finalProbs
         
-    def getContinuousAction(self, x, evaluation=False, withLogProbs=True):
-        obs1D, obs3D = processObservations(x)
-        observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+    def getContinuousAction(self, x, evaluation=False, withLogProbs=True, processObs=True):
+        if processObs:
+            obs1D, obs3D = processObservations(x)
+            observationFeatures = self.getObservationFeaturesForActor(obs1D, obs3D)
+        else:
+            observationFeatures = self.getObservationFeaturesForActor(x[0], x[1])
+
         actionMean = self.actorContinuous(observationFeatures)
         actionLogStd = self.actorLogStd(observationFeatures)
         actionLogStd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (actionLogStd + 1) # Keeps bounds transforming range -1:1 to min:max
@@ -356,13 +350,69 @@ class WrapperNet(torch.nn.Module):
         self.actor = actor
         self.version_number = Parameter(torch.Tensor([3]), requires_grad=False)
         self.memory_size = Parameter(torch.Tensor([0]), requires_grad=False)
-        output_shape = torch.Tensor(envSpecs["DiscreteActions"])
-        self.discrete_shape = Parameter(output_shape, requires_grad=False)
+        self.discrete_shape = Parameter(torch.Tensor(envSpecs["DiscreteActions"]), requires_grad=False)
+        self.continuous_shape = Parameter(torch.Tensor(envSpecs["ContinuousActions"]), requires_grad=False)
 
 
-    def forward(self, x1, x2, mask):
-        # print(f"x1: {x1}, x2: {x2}")
-        x = torch.cat((x1, x2), -1).to(device)
-        # print(f"x: {x}")
-        action, _, _ = self.actor.getDiscreteAction(x, mask=mask, processObs=False, withLogProbs=False)
-        return action, self.discrete_shape, self.version_number, self.memory_size
+    def forward(self, *args, mask=torch.tensor(1, device=device)):
+        obs1D, obs3D = [], []
+        if self.actor.usingDiscreteActions:
+            mask = args[-1]
+            args = args[:-1]
+
+        for arg in args:
+            if arg.ndim == 2:
+                obs1D.append(arg)
+            elif arg.ndim == 4:
+                obs3D.append(arg)
+            else:
+                print(f"Unexpected {arg.ndim} dimensional observation in forward of WrapperNet")
+
+        x = (torch.cat(obs1D, -1).to(device) if obs1D else None, torch.cat(obs3D, -1).to(device) if obs3D else None)
+
+        if self.actor.usingContinuousActions and self.actor.usingDiscreteActions:
+            actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False)
+            actionD, _, _ = self.actor.getDiscreteAction(x, processObs=False, withLogProbs=False, mask=mask)
+            return actionC, self.continuous_shape, actionD, self.discrete_shape, self.version_number, self.memory_size
+        
+        if self.actor.usingContinuousActions:
+            print(f"We're here in only C branch getting action")
+            actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False)
+            return actionC, self.continuous_shape, self.version_number, self.memory_size
+        
+        if self.actor.usingDiscreteActions:
+            actionD, _, _ = self.actor.getDiscreteAction(x, processObs=False, withLogProbs=False, mask=mask)
+            return actionD, self.discrete_shape, self.version_number, self.memory_size
+
+
+
+def exportONNX(filename, actor, envSpecs):
+    sampleInputs = [torch.randn((1, *shape), device=device) for shape in envSpecs['Observations']]
+    if actor.usingDiscreteActions:
+        maskShape = (1, torch.tensor(envSpecs["DiscreteActions"]).prod().item())
+        sampleInputs.append(torch.ones(maskShape, device=device))
+    
+    inputNames = [f"obs_{i}" for i in range(len(envSpecs['Observations']))]
+    if actor.usingDiscreteActions:
+        inputNames.append("action_masks")
+    
+    outputNames = []
+    if actor.usingContinuousActions:
+        outputNames.extend(["continuous_actions", "continuous_action_output_shape"])
+    if actor.usingDiscreteActions:
+        outputNames.extend(["discrete_actions", "discrete_action_output_shape"])
+    outputNames.extend(["version_number", "memory_size"])
+    
+    print(f"{outputNames}")
+
+    dynamicAxes = {name: {0: 'batch'} for name in inputNames}
+    # Export the model
+    torch.onnx.export(
+        WrapperNet(actor, envSpecs),
+        tuple(sampleInputs),
+        f"{filename}.onnx",
+        opset_version=13,
+        input_names=inputNames,
+        output_names=outputNames,
+        dynamic_axes=dynamicAxes
+    )
