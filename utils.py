@@ -17,7 +17,7 @@ from torch.nn import Parameter
 # TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
 
 class UnityInterface():
-    def __init__(self, envName, seed):
+    def __init__(self, envName, seed=None):
         self.channelEnvironment = EnvironmentParametersChannel()
         self.channelEngine = EngineConfigurationChannel()
         self.env = UnityEnvironment(file_name=envName, seed=seed, side_channels=[self.channelEnvironment, self.channelEngine])
@@ -355,7 +355,6 @@ class WrapperNet(torch.nn.Module):
 
 
     def forward(self, *args):
-        print(f"Args: {args}")
         obs1D, obs3D = [], []
         if self.actor.usingDiscreteActions:
             mask = args[-1]
@@ -377,9 +376,7 @@ class WrapperNet(torch.nn.Module):
             return actionC, self.continuous_shape, actionD, self.discrete_shape, self.version_number, self.memory_size
         
         if self.actor.usingContinuousActions:
-            print(f"We're here in only C branch getting action")
             actionC, _ = self.actor.getContinuousAction(x, processObs=False, withLogProbs=False, evaluation=True)
-            print(f"We return: {(actionC, self.continuous_shape, self.version_number, self.memory_size)}")
             return actionC, self.continuous_shape, self.version_number, self.memory_size
         
         if self.actor.usingDiscreteActions:
@@ -405,7 +402,7 @@ def exportONNX(filename, actor, envSpecs):
         outputNames.extend(["discrete_actions", "discrete_action_output_shape"])
     outputNames.extend(["version_number", "memory_size"])
     
-    print(f"Output names: {outputNames}")
+    # print(f"Output names: {outputNames}")
 
     dynamicAxes = {name: {0: 'batch'} for name in inputNames}
     # Export the model
