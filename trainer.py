@@ -8,8 +8,6 @@ import matplotlib.pyplot as plt
 from utils import *
 # torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=2000)
 
-# TODO: If I substituted every dictionary usage with named_tuple, would that be much faster and worth the effort?
-
 seed: int = 1
 torch_deterministic: bool = True
 totalTimesteps: int = 220000
@@ -46,16 +44,15 @@ torch.backends.cudnn.deterministic = torch_deterministic
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)              # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8	# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)     # 1D obs only, continuous action of size 8
-# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-env = UnityInterface("Builds\\Windows\\PushBlockMov\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-# env = UnityInterface("Builds\\Windows\\PushBlockImproved\\UnityEnvironment", seed=seed) # Good reward, -0.01 for step, 0.01 when moving block in xz plane, 5 for win
-# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)            # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)    # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8
+# env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+env = UnityInterface("Builds\\Windows\\PushBlockMov\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step, mod with roughly 0.001 while moving the block
+# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)            # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)
 # env = UnityInterface("Builds\\Windows\\Worm\\UnityEnvironment", seed=seed)
 
-# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                             # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return	# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                     # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
-# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)                       # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step	# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)               # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                         # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                 # 1D obs only, discrete action of size (3, 3, 3, 2)
+# env = UnityInterface("Builds/Linux/Ball3D/Ball3D", seed=seed)                             # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
+# env = UnityInterface("Builds/Linux/PushBlock/PushBlock", seed=seed)                       # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
+# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)                         # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds/Linux/WallJump/WallJump", seed=seed)
 
 # env = UnityInterface(None, seed=seed)
 
@@ -157,10 +154,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                     observationBuffer[agent] = None
                     actionsBuffer[agent]['continuous'] = None
                     actionsBuffer[agent]['discrete'] = None
-                    # Save rewards only if we made an action before, otherwise the initial state was terminated state
                     rewards[agent] += reward
-                    # if rewards[agent] > 4 * rewardScaling:
-                    #     print(f"Final reward: {rewards[agent]:>.2f}")
                 finalRewards.append(rewards[agent])
                 rewards[agent] = 0
 
@@ -187,9 +181,6 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                     if nrOfDiscreteActions > 0:
                         actionsBuffer[agent]['discrete'] = behaviorActionsForThisStep['discrete'][j]
 
-            # print(f"Setting Continuous actions: {behaviorActionsForThisStep}, Discrete actions: {behaviorActionsForThisStep}")
-            # print(f"Discrete action buffer shape before detachcpunumpy: {behaviorActionsForThisStep['discrete'].shape}")
-            # print(f"Discrete action buffer shape after detachcpunumpy: {behaviorActionsForThisStep['discrete'].detach().cpu().numpy().shape}")
             env.setActions(behavior, behaviorActionsForThisStep['continuous'].detach().cpu().numpy(), behaviorActionsForThisStep['discrete'].detach().cpu().numpy())
         env.step()
     
@@ -235,7 +226,6 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
 
 
 
-            # TODO: I should reuse actor passes with alpha update. Alpha will update with the frequency of actor?
             # #################### ACTOR UPDATE
             stateActionsContinuous, stateActionsDiscrete, stateLogProbsContinuous, stateLogProbsDiscrete, stateProbsDiscrete = None, None, torch.tensor(0, device=device), torch.tensor(0, device=device), torch.tensor(1, device=device)
             if actor[behavior].usingContinuousActions:

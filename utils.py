@@ -99,33 +99,22 @@ def getObsSizes(specs):
             print(f"Unexpected {len(obsShape)}-dimensional observation")
     return obsSize1D, osbSize3D
 
-# NOTE: VERY IMPORTANT: This might be the bigest slowdown in the program. Try Unwrapping the observations and deal with them together. Dont go one by one and check each element 
 # In Unity they have observation components that we have to deal with.
 # Observations come as tuple of ndarrays of either 1D or 3D, I simply concatenate it into one of each type
 def processObservations(x):
-    # print(f"processObservations: x: {x}")
-    allObs1D, allObs3D = [], []
-    for observation in x:
-        # print(f"processObservations: observation: {observation}")
-        obs1D, obs3D = [], []
-        for observationElement in observation:
-            # print(f"processObservations: observationElement: {observationElement}")
-            observationElement = torch.tensor(observationElement)
-            if observationElement.ndim == 1:
-                obs1D.append(observationElement)
-            elif observationElement.ndim == 3:
-                obs3D.append(observationElement)
-            else:
-                print(f"Unexpected {observationElement.ndim}-dimensional observation")
-        if obs1D:
-            allObs1D.append(torch.cat(obs1D))
-        if obs3D:
-            allObs3D.append(torch.cat(obs3D))
+    observationElements = tuple(map(tuple, zip(*x)))
+    obs1D, obs3D = [], []
+    for observationElement in observationElements:
+        if observationElement[0].ndim == 1:
+            obs1D.append(torch.from_numpy(np.stack(observationElement)))
+        elif observationElement[0].ndim == 3:
+            obs3D.append(torch.from_numpy(np.stack(observationElement)))
+        else:
+            print(f"Unexpected {observationElement[0].ndim}-dimensional observation")
 
-    final1D = torch.stack(allObs1D).to(device) if allObs1D else torch.empty(0, dtype=torch.float32, device=device)
-    final3D = torch.stack(allObs3D).to(device) if allObs3D else torch.empty(0, dtype=torch.float32, device=device)
+    final1D = torch.cat(obs1D, -1).to(device) if obs1D else torch.empty(0, dtype=torch.float32, device=device)
+    final3D = torch.cat(obs3D, -1).to(device) if obs3D else torch.empty(0, dtype=torch.float32, device=device)
     return final1D, final3D
-
 
 class QNetwork(nn.Module):
     def __init__(self, envSpecs):
