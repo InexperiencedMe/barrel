@@ -4,8 +4,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # TODO: It doesn't support multiple behaviors in one env. Need to find a neat way to load multiple checkpoints. I should save checkpoints with dicts that hold all behaviors in one checkpoint
 
 
-env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment")      # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
+# env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment")      # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
 # env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment")     # 1D obs only, continuous action of size 8
+env = UnityInterface("Builds\\Windows\\Crawlerx01\\UnityEnvironment")     # 1D obs only, continuous action of size 8
 # env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment")   # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
 # env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment")    # 1D obs only, discrete action of size (3, 3, 3, 2)
 # env = UnityInterface(None) 
@@ -13,7 +14,7 @@ env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment")      # 1D obs 
 print(f"{env.getSpecs()}")
 behaviorNames = env.getBehaviorNames()
 
-checkpointNames = ["3DBall--5000", "3DBall--10000", "3DBall--15000", "3DBall--30000", "3DBall--50000", "3DBall--100000", "3DBall--150000"]
+checkpointNames = ["Crawler-x01 r2-10000", "Crawler-x01 r2-200000", "Crawler-x01 r2-400000", "Crawler-x01-r2-1500000", "Crawler-x01-r2-1950000", "Crawler-x01-r2-3190000"]
 checkpoints = [f"checkpoints\\{name}.pth" for name in checkpointNames]
 
 for i, checkpoint in enumerate(checkpoints):

@@ -9,28 +9,28 @@ from utils import *
 # torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=2000)
 
 seed: int = 1
-torch_deterministic: bool = True
-totalTimesteps: int = 220000
-bufferSize: int = int(1e4)
-gamma: float = 0.98
+torch_deterministic: bool = False
+totalTimesteps: int = 2050000
+bufferSize: int = int(1e5)
+gamma: float = 0.995
 tau: float = 0.005
 batchSize: int = 128
 learningStart: int = 2000
 actorLR: float = 3e-4
 criticLR: float = 3e-4
 optimizationInterval: int = 1
-stepInterval: int = 4
+stepInterval: int = 6
 softCriticUpdateInterval: int = 1
 targetEntropy_scale: float = 0.9
-rewardScaling: float = 10
+rewardScaling: float = 1
 lossesPlotAveraging = 5
 rewardsPlotAveraging = 1
-graph = True
-resume = True
 saveCheckpoints = True
 checkpointInterval: int = 10000
-checkpointToLoad = f"checkpoints\\PushBlock-HOPE-880000.pth"
-checkpointIDsubstring = "HOPE"
+graph = True
+resume = True
+checkpointToLoad = f"checkpoints\\Crawler-x01-r2-1950000.pth"
+checkpointIDsubstring = "x01-r2"
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
@@ -45,8 +45,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)              # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
 # env = UnityInterface("Builds\\Windows\\Crawler\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8
+env = UnityInterface("Builds\\Windows\\Crawlerx01\\UnityEnvironment", seed=seed)             # 1D obs only, continuous action of size 8, x01 version, all scaled with 0.1, so different physics
 # env = UnityInterface("Builds\\Windows\\PushBlock\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step
-env = UnityInterface("Builds\\Windows\\PushBlockMov\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step, mod with roughly 0.001 while moving the block
+# env = UnityInterface("Builds\\Windows\\PushBlockMov\\UnityEnvironment", seed=seed)           # 1D obs only, discrete action of size (7). Rewards: 5 for win, -0.001 for every step, mod with roughly 0.001 while moving the block
 # env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)            # 1D obs only, discrete action of size (3, 3, 3, 2)	# env = UnityInterface("Builds\\Windows\\WallJump\\UnityEnvironment", seed=seed)
 # env = UnityInterface("Builds\\Windows\\Worm\\UnityEnvironment", seed=seed)
 
@@ -139,8 +140,8 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                     memory[behavior].push(lastObservation, lastActionContinuous, lastActionDiscrete, reward, False, observation)
                 observationBuffer[agent] = observation
                 rewards[agent] += reward
-                if reward > 3:
-                    print(f"D agent {agent} scored a goal. final reward: {rewards[agent]}")
+                # if reward > 3:
+                #     print(f"D agent {agent} scored a goal. final reward: {rewards[agent]}")
                 
             for agent in terminalSteps:
                 observation = terminalSteps[agent].obs
@@ -300,7 +301,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                         checkpoint["alphaD"] = alphaD[behavior]
                         checkpoint["alphaOptimizerD"] = alphaOptimizerD[behavior].state_dict()
 
-                    torch.save(checkpoint, f"checkpoints\\{behavior[:behavior.find('?')]}-{checkpointIDsubstring}-{globalStep}.pth")
+                    torch.save(checkpoint, f"checkpoints\\{behavior[:behavior.find('?')]}-{checkpointIDsubstring}-{globalStep/1000:.0f}k.pth")
 
                     if graph:
                         beginning = 0
@@ -341,7 +342,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
 
                         plt.legend()
                         plt.tight_layout()
-                        plt.savefig(f"graphs\\{behavior[:behavior.find('?')]}-{checkpointIDsubstring}-{globalStep}", bbox_inches='tight')
+                        plt.savefig(f"graphs\\{behavior[:behavior.find('?')]}-{checkpointIDsubstring}-{globalStep/1000:.0f}k", bbox_inches='tight')
                         plt.close('all')
                 
 env.close()

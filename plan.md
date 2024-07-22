@@ -1,46 +1,24 @@
+### Vision:
 
-- imports
-- getParams()
+Barrel raises the bar of reinforcement learning. It's a Deep RL library interfacing with Unity engine, that is used for AI research to experiment and explore different pathways. It's an AI playground interface.
 
-env = UnityInterface()
-specs = env.getSpecs() # Returns dict with agents and their specs as another dict
-
-We'll need setActions, step, reset, and all these things like converting actions to ActionTuple before passing. Since we dont want to think about this in main script
-
-These will be just specs provided to the actor as a dict! DAMN
-    strikerObservationSpace = specs["Striker"]["ObsSpace"]
-    strikerContActionSize = specs["Striker"]["ContinuousActionSize"]
-    strikerDiscreteActionSize = specs["Striker"]["DiscreteActionSize"]
-
-- initialize nets. They should have builtin q networks as a part of the same architecture.
-- Optimizers also should be inside. Optimizer will be a part of architecture, hidden in the API
-- SAC will have automatic entropy tuning inside. As few magic numbers as possible
-- Memory should also be instantiated inside, but.. Hmmm.. Yeah, need names, but they will be constant! (Observation, action, reward, dones, next observation)
-
-(For architectures, a ton of things to think about. How to handle both vectors obs and visual obs. The whole point of visual obs is the spatial relationship, thats what convolutional nets are made for. I cannot just flatten it and "there you go")
-
-class actor(nn.Module):
-    def __init__(self, specs[agentName]) # Define layers, crtics, optimizers and memory
-    def forward() # get Obs and produce continuous and discrete actions. We will convert it to ActionTuple before passing to Unity env
-    def optimizePolicy()
-    def optimizeQNets()
-    def optimizeEntropy()
-    def addMemory()
-    def evaluateState() for q networks
-
-    ! Memory should know how much memories is being put in !
-    Make it just multiple big tensors of memories for each category
+Not speed competitive yet. We prioritize features and extending the current possibilities.
 
 
-Analyze this:
-https://github.com/nisheeth-golakiya/hybrid-sac/blob/main/hybrid_sac_platform.py
+### Further main goals:
 
+1. Finish SAC implementation
+- Make it easy to change the sizes and number of hidden layers (save them in checkpoint)
+- Can we still make it enclosed in a class? Didnt work last time but we can try again after many changes
 
------
+2. Improve the API - make parts of the code reusable
+- Make universal graphing function
+- Saving, loading checkpoint from a function
+- Initialization of buffers from a function
+- Managing buffers with a function (adding memories, resetting buffers, adding reward, appending reward)
 
-Further steps:
-1. Beat more envs. Discrete actions for sure and visual obs and hybrid actions. Why did loss explode on pushblock? Why does it get stuck?
-2. When everything works, full refactor. separate file for actors and critics. Self contained optimziation. In main I should have just optimize calls, no details no bs
-3. Full ONNX export for saving and processing. And checkpoints with resuming training
-4. Speed it up. Max out the flops potential
-5. Develop more algorithms 
+3. More algorithms!
+- PPO
+- Genetic algorithm
+- Curiosity-Driven agent
+- MuZero
