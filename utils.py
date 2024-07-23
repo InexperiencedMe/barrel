@@ -14,8 +14,6 @@ from itertools import product
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 from torch.nn import Parameter
 
-# TODO: Make debugging modular. Functions should have print statements when DEBUG param is passed
-
 class UnityInterface():
     def __init__(self, envName, seed=None):
         self.channelEnvironment = EnvironmentParametersChannel()
@@ -117,37 +115,38 @@ def processObservations(x):
     return final1D, final3D
 
 class QNetwork(nn.Module):
-    def __init__(self, envSpecs):
+    def __init__(self, envSpecs, architecture = {"preCritic1D": [512, 256], "preCritic3D": [16, 32, 32], "criticFinal": [256, 256]}):
         super(QNetwork, self).__init__()
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
         self.obsChannels3D = self.obsSize3D[-3] # third last element is number of channels. F.e. 3x128x128
         self.continuousActionSize = self.envSpecs["ContinuousActions"]
-        self.preCritic1DoutputSize = 0
         self.preCritic3DoutputSize = 0
         self.using1Dobs = self.obsSize1D > 0
         self.using3Dobs = sum(self.obsSize3D) > 0
         self.usingDiscreteActions = len(self.envSpecs["DiscreteActions"]) > 0
         self.usingContinuousActions = self.continuousActionSize > 0
-
         self.outputSize = np.array(self.envSpecs["DiscreteActions"]).prod() if self.usingDiscreteActions else 1
+        self.architecture = architecture
 
         if self.using1Dobs:
-            self.preCritic1DoutputSize = 256
-            self.preCritic1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 512), nn.Tanh(),
-                nn.Linear(512, self.preCritic1DoutputSize), nn.Tanh())
+            self.preCritic1D = getSequentialModel1D(self.obsSize1D, architecture["preCritic1D"][:-1], architecture["preCritic1D"][-1], finishWithActivation=True)
+            # self.preCritic1DoutputSize = 256
+            # self.preCritic1D = nn.Sequential(
+            #     nn.Linear(self.obsSize1D, 512), nn.Tanh(),
+            #     nn.Linear(512, self.preCritic1DoutputSize), nn.Tanh())
         
         if self.using3Dobs:
-            self.preCritic3D = nn.Sequential(
-                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
-                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
-                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
-            with torch.no_grad():
-                self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
+            self.preCritic3D = getSequentialModel3D(self.obsChannels3d, architecture["preCritic3D"])
+            # self.preCritic3D = nn.Sequential(
+            #     nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
+            #     nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
+            #     nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
+            self.preCritic3DoutputSize = calculateConvNetOutputSize(self.preCritic3D, self.obsSize3D)
 
-        self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 256),
-                                         nn.Tanh(), nn.Linear(256, self.outputSize))
+        self.criticFinal = getSequentialModel1D(architecture["preCritic1D"][-1] + self.preCritic3DoutputSize + self.getTotalActionSize(), architecture["criticFinal"], self.outputSize)
+        # self.criticFinal = nn.Sequential(nn.Linear(self.preCritic1DoutputSize + self.preCritic3DoutputSize + self.getTotalActionSize(), 256),
+        #                                  nn.Tanh(), nn.Linear(256, self.outputSize))
     
     def forward(self, x, actionsContinuous=None, actionsDiscrete=None):
         obs1D, obs3D = processObservations(x)
@@ -186,52 +185,54 @@ LOG_STD_MAX = 2
 LOG_STD_MIN = -5
 
 class SAC(nn.Module):
-    # TODO: Make architecture flexible. Set sizes and numer of hidden layers in few lines
     # TODO: Think about what variable should be local. Not all vars need "self."
-    def __init__(self, envSpecs, continuousActionLowBound = -1, continuousActionHighBound = 1):
+    def __init__(self, envSpecs, architecture = {"preActor1D": [512, 256], "preActor3D": [16, 32, 32], "actorContinuous": [256], "actorDiscrete": [256]},
+                 cActionLowBound = -1, cActionHighBound = 1):
+        
         super(SAC, self).__init__()
         self.envSpecs = envSpecs
         self.obsSize1D, self.obsSize3D = getObsSizes(self.envSpecs)
         self.obsChannels3D = self.obsSize3D[0] # first shape dim is channels
         self.continuousActionSize = self.envSpecs["ContinuousActions"]
-        self.preActor1DoutputSize = 0
-        self.preActor3DoutputSize = 0
         self.using1Dobs = self.obsSize1D > 0
         self.using3Dobs = sum(self.obsSize3D) > 0
         self.usingDiscreteActions = len(self.envSpecs["DiscreteActions"]) > 0
         self.usingContinuousActions = self.continuousActionSize > 0
+        self.architecture = architecture
+        self.preActor3DoutputSize = 0
         assert self.using1Dobs or self.using3Dobs, "No 1D or 3D observations and you expect it to work?!?!?!?"
         assert self.usingDiscreteActions or self.usingContinuousActions, "We have to use either continuous or discrete actions"
 
         if self.using1Dobs:      
-            self.preActor1DoutputSize = 256
-            self.preActor1D = nn.Sequential(
-                nn.Linear(self.obsSize1D, 512), nn.Tanh(),
-                nn.Linear(512, self.preActor1DoutputSize), nn.Tanh())
+            self.preActor1D = getSequentialModel1D(self.obsSize1D, architecture["preActor1D"][:-1], architecture["preActor1D"][-1], finishWithActivation=True)
+            # self.preActor1D = nn.Sequential(
+            #     nn.Linear(self.obsSize1D, 512), nn.Tanh(),
+            #     nn.Linear(512, self.preActor1DoutputSize), nn.Tanh())
             
         if self.using3Dobs:
-            self.preActor3D = nn.Sequential(
-                nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
-                nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
-                nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
+            self.preActor3D = getSequentialModel3D(self.obsChannels3d, architecture["preActor3D"])
+            # self.preActor3D = nn.Sequential(
+            #     nn.Conv2d(self.obsChannels3D, 16, 7, stride=4), nn.Tanh(),
+            #     nn.Conv2d(16, 32, 5, stride=2), nn.Tanh(),
+            #     nn.Conv2d(32, 32, 3, stride=1), nn.Tanh(), nn.Flatten())
             self.preActor3DoutputSize = calculateConvNetOutputSize(self.preActor3D, self.obsSize3D)
 
         if self.usingContinuousActions:
-            self.actorContinuous = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
-                nn.Linear(256, self.continuousActionSize))        
-            self.actorLogStd = nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, self.continuousActionSize)
-            self.register_buffer("continuousActionScale", torch.tensor((continuousActionHighBound - continuousActionLowBound) / 2.0, dtype=torch.float32))
-            self.register_buffer("continuousActionBias", torch.tensor((continuousActionHighBound + continuousActionLowBound) / 2.0, dtype=torch.float32))
+            self.actorContinuous = getSequentialModel1D(architecture["preActor1D"][-1] + self.preActor3DoutputSize, architecture["actorContinuous"], self.continuousActionSize)
+            # self.actorContinuous = nn.Sequential(
+            #     nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
+            #     nn.Linear(256, self.continuousActionSize))        
+            self.actorLogStd = nn.Linear(architecture["preActor1D"][-1] + self.preActor3DoutputSize, self.continuousActionSize)
+            self.register_buffer("continuousActionScale", torch.tensor((cActionHighBound - cActionLowBound) / 2.0, dtype=torch.float32))
+            self.register_buffer("continuousActionBias", torch.tensor((cActionHighBound + cActionLowBound) / 2.0, dtype=torch.float32))
 
         if self.usingDiscreteActions:
-            self.actorDiscrete = nn.Sequential(
-                nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
-                nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
-            # print(f"So because we have actions defined as {self.envSpecs['DiscreteActions']}, are output discrete layer is of size {sum(self.envSpecs['DiscreteActions'])}")
+            self.actorDiscrete = getSequentialModel1D(architecture["preActor1D"][-1] + self.preActor3DoutputSize, architecture["actorDiscrete"], sum(self.envSpecs["DiscreteActions"]))
+            # self.actorDiscrete = nn.Sequential(
+            #     nn.Linear(self.preActor1DoutputSize + self.preActor3DoutputSize, 256), nn.Tanh(),
+            #     nn.Linear(256, sum(self.envSpecs["DiscreteActions"])))
         
     # TODO: not handling action masks yet
-    # TODO: Should combine the 2 action types and return empty action if not needed
     def getDiscreteAction(self, x, action=None, withLogProbs=True, mask=torch.tensor([1], device=device), processObs=True):
         if processObs:
             obs1D, obs3D = processObservations(x)
@@ -315,6 +316,38 @@ class SAC(nn.Module):
         elif self.using3Dobs:
             return self.preActor3D(obs3D)
     
+def getSequentialModel1D(inputSize, hiddenSizes, outputSize, finishWithActivation = False, activationFunction = nn.Tanh):
+    layers = []
+    currentInputSize = inputSize
+
+    for hiddenSize in hiddenSizes:
+        layers.append(nn.Linear(currentInputSize, hiddenSize))
+        layers.append(activationFunction())
+        currentInputSize = hiddenSize
+    
+    layers.append(nn.Linear(currentInputSize, outputSize))
+    if finishWithActivation:
+        layers.append(activationFunction())
+
+    return nn.Sequential(*layers)
+
+def getSequentialModel3D(inputChannels, hiddenChannels, activationFunction = nn.Tanh):
+        layers = []
+        currentInputSize = inputChannels
+        kernelSize = 7
+        
+        for hiddenSize in hiddenChannels:
+            stride = kernelSize // 2
+            layers.append(nn.Conv2d(currentInputSize, hiddenSize, kernelSize, stride))
+            layers.append(activationFunction())
+            currentInputSize = hiddenSize
+            kernelSize = max(3, kernelSize - 2)
+
+        layers.append(nn.Flatten())
+        return nn.Sequential(*layers)
+
+
+            
     
 class Memory(object):
     def __init__(self, capacity, fieldNames=["observations", "actionsContinuous", "actionsDiscrete", "rewards", "dones", "nextObservations"]):

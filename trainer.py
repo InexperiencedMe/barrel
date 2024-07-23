@@ -10,12 +10,12 @@ from utils import *
 
 seed: int = 1
 torch_deterministic: bool = False
-totalTimesteps: int = 2050000
+totalTimesteps: int = 200000
 bufferSize: int = int(1e5)
 gamma: float = 0.995
 tau: float = 0.005
 batchSize: int = 128
-learningStart: int = 2000
+learningStart: int = 1000
 actorLR: float = 3e-4
 criticLR: float = 3e-4
 optimizationInterval: int = 1
@@ -27,10 +27,13 @@ lossesPlotAveraging = 5
 rewardsPlotAveraging = 1
 saveCheckpoints = True
 checkpointInterval: int = 10000
-graph = True
+graph = False
 resume = True
-checkpointToLoad = f"checkpoints\\Crawler-x01-r2-1950000.pth"
-checkpointIDsubstring = "x01-r2"
+checkpointToLoad = f"checkpoints\\Crawler-TESTING-5k.pth"
+checkpointIDsubstring = "TESTING"
+customArchitecture = True
+actorArchitecture = {"preActor1D": [512, 256], "preActor3D": [16, 32, 32], "actorContinuous": [128], "actorDiscrete": [256]}
+criticArchitecture = {"preCritic1D": [512, 256], "preCritic3D": [16, 32, 32], "criticFinal": [128]}
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
@@ -70,12 +73,20 @@ targetEntropyC, logAlphaC, alphaC, alphaOptimizerC = {}, {}, {}, {}
 targetEntropyD, logAlphaD, alphaD, alphaOptimizerD = {}, {}, {}, {}
 for behavior in behaviorNames:
     envSpecs = env.getSpecs(behavior)
-    actor[behavior] = SAC(envSpecs).to(device)
+    if resume:
+        checkpoint = torch.load(checkpointToLoad)
+        actorArgs, criticArgs = (envSpecs, checkpoint["actorArchitecture"]), (envSpecs, checkpoint["criticArchitecture"])
+    elif customArchitecture:
+        actorArgs, criticArgs = (envSpecs, actorArchitecture), (envSpecs, criticArchitecture)
+    else:
+        actorArgs, criticArgs = (envSpecs,), (envSpecs,)
+
+    actor[behavior] = SAC(*actorArgs).to(device)
     actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-5)
-    QFunction1[behavior] = QNetwork(envSpecs).to(device)
-    QFunction2[behavior] = QNetwork(envSpecs).to(device)
-    QFunction1Target[behavior] = QNetwork(envSpecs).to(device)
-    QFunction2Target[behavior] = QNetwork(envSpecs).to(device)
+    QFunction1[behavior] = QNetwork(*criticArgs).to(device)
+    QFunction2[behavior] = QNetwork(*criticArgs).to(device)
+    QFunction1Target[behavior] = QNetwork(*criticArgs).to(device)
+    QFunction2Target[behavior] = QNetwork(*criticArgs).to(device)
     QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
     QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
     criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-5)
@@ -99,7 +110,6 @@ for behavior in behaviorNames:
         alphaOptimizerD[behavior] = optim.Adam([logAlphaD[behavior]], lr=criticLR, eps=1e-5)
 
     if resume:
-        checkpoint = torch.load(checkpointToLoad)
         actor[behavior].load_state_dict(checkpoint["actor"])
         actorOptimizer[behavior].load_state_dict(checkpoint["actorOptimizer"])
         QFunction1[behavior].load_state_dict(checkpoint["QFunction1"])
@@ -285,13 +295,16 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                     checkpoint = {
                         'actor': actor[behavior].state_dict(),
                         'actorOptimizer': actorOptimizer[behavior].state_dict(),
+                        'actorArchitecture': actor[behavior].architecture,
                         'QFunction1': QFunction1[behavior].state_dict(),
                         'QFunction2': QFunction2[behavior].state_dict(),
                         'QFunction1Target': QFunction1Target[behavior].state_dict(),
                         'QFunction2Target': QFunction2Target[behavior].state_dict(),
                         'criticOptimizer': criticOptimizer[behavior].state_dict(),
-                        'globalStep': globalStep,
+                        'criticArchitecture': QFunction1[behavior].architecture,
+                        'globalStep': globalStep
                     }
+
                     if actor[behavior].usingContinuousActions:
                         checkpoint["logAlphaC"] = logAlphaC[behavior]
                         checkpoint["alphaC"] = alphaC[behavior]
