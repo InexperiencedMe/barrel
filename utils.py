@@ -181,6 +181,83 @@ class QNetwork(nn.Module):
         features = torch.cat(featuresList, -1)
         return features
 
+class SoftDoubleCritic():
+    def __init__(self, envSpecs, singleQNetArchitecture, lr, gamma, tau):
+        if singleQNetArchitecture:
+            qnetArgs = (envSpecs, singleQNetArchitecture)
+        else:
+            qnetArgs = (envSpecs,)
+
+        self.singleQNetArchitecture = singleQNetArchitecture
+        self.QFunction1 = QNetwork(*qnetArgs).to(device)
+        self.QFunction2 = QNetwork(*qnetArgs).to(device)
+        self.QFunction1Target = QNetwork(*qnetArgs).to(device)
+        self.QFunction2Target = QNetwork(*qnetArgs).to(device)
+        self.QFunction1Target.load_state_dict(self.QFunction1.state_dict())
+        self.QFunction2Target.load_state_dict(self.QFunction2.state_dict())
+        self.optimizer = optim.Adam(list(self.QFunction1.parameters()) + list(self.QFunction2.parameters()), lr=lr, eps=1e-5)
+        self.tau = tau
+        self.gamma = gamma
+        self.criticLoss = 0
+
+    def getDictForCheckpoint(self):
+        partialCheckpoint = {
+                        'QFunction1': self.QFunction1.state_dict(),
+                        'QFunction2': self.QFunction2.state_dict(),
+                        'QFunction1Target': self.QFunction1Target.state_dict(),
+                        'QFunction2Target': self.QFunction2Target.state_dict(),
+                        'criticOptimizer': self.optimizer.state_dict(),
+                        'criticArchitecture': self.singleQNetArchitecture,
+                    }
+        return partialCheckpoint
+
+    def loadCheckpoint(self, checkpoint):
+        self.QFunction1.load_state_dict(checkpoint["QFunction1"])
+        self.QFunction2.load_state_dict(checkpoint["QFunction2"])
+        self.QFunction1Target.load_state_dict(checkpoint["QFunction1Target"])
+        self.QFunction2Target.load_state_dict(checkpoint["QFunction2Target"])
+        self.optimizer.load_state_dict(checkpoint["criticOptimizer"])
+
+    def softUpdate(self):
+        for param, targetParam in zip(self.QFunction1.parameters(), self.QFunction1Target.parameters()):
+            targetParam.data.copy_(self.tau * param.data + (1 - self.tau) * targetParam.data)
+        for param, targetParam in zip(self.QFunction2.parameters(), self.QFunction2Target.parameters()):
+            targetParam.data.copy_(self.tau * param.data + (1 - self.tau) * targetParam.data)
+
+    def update(self, actor, obs, actionsC, actionsD, rewards, isThereNextStep, nextObs, alphaC, alphaD):
+        with torch.no_grad():
+            nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete = None, None, 0, 0, 1
+            if actor.usingContinuousActions:
+                nextStateActionsContinuous, nextStateLogProbsContinuous = actor.getContinuousAction(nextObs)
+            if actor.usingDiscreteActions:
+                nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor.getDiscreteAction(nextObs)
+
+            minQNextTarget = nextStateProbsDiscrete * (self.evaluate(nextObs, nextStateActionsContinuous, nextStateActionsDiscrete) - (alphaC*nextStateLogProbsContinuous + alphaD*nextStateLogProbsDiscrete))
+            if minQNextTarget.ndim > 1:
+                minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
+            nextQValue = rewards + isThereNextStep * self.gamma * minQNextTarget
+            
+        QFunction1ActionValues = self.QFunction1(obs, actionsC.detach() if actor.usingContinuousActions else None, actionsD.detach() if actor.usingDiscreteActions else None)
+        QFunction2ActionValues = self.QFunction2(obs, actionsC.detach() if actor.usingContinuousActions else None, actionsD.detach() if actor.usingDiscreteActions else None)
+        if actor.usingDiscreteActions:
+            QFunction1ActionValues = gatherEvaluationOfTakenActions(QFunction1ActionValues, actionsD)
+            QFunction2ActionValues = gatherEvaluationOfTakenActions(QFunction2ActionValues, actionsD)
+        QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
+        QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
+        criticLoss = QFunction1Loss + QFunction2Loss
+        self.criticLoss = criticLoss
+        self.optimizer.zero_grad()
+        criticLoss.backward()
+        torch.nn.utils.clip_grad_norm_(self.QFunction1.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.QFunction2.parameters(), max_norm=1.0)
+        self.optimizer.step()
+
+    def evaluate(self, obs, actionsC, actionsD):
+        eval1 = self.QFunction1Target(obs, actionsC, actionsD)
+        eval2 = self.QFunction2Target(obs, actionsC, actionsD)
+        return torch.min(eval1, eval2)
+
+
 LOG_STD_MAX = 2
 LOG_STD_MIN = -5
 
@@ -437,3 +514,9 @@ def exportONNX(filename, actor, envSpecs):
         output_names=outputNames,
         dynamic_axes=dynamicAxes
     )
+
+def seedEverything(seed, torchDeterministic):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = torchDeterministic

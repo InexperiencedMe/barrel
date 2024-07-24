@@ -9,8 +9,8 @@ from utils import *
 # torch.set_printoptions(linewidth=100, precision=4, sci_mode=False, threshold=2000)
 
 seed: int = 1
-torch_deterministic: bool = False
-totalTimesteps: int = 200000
+torchDeterministic: bool = False
+totalTimesteps: int = 100000
 bufferSize: int = int(1e5)
 gamma: float = 0.995
 tau: float = 0.005
@@ -27,23 +27,15 @@ lossesPlotAveraging = 5
 rewardsPlotAveraging = 1
 saveCheckpoints = True
 checkpointInterval: int = 10000
-graph = False
+graph = True
 resume = True
-checkpointToLoad = f"checkpoints\\Crawler-TESTING-5k.pth"
+checkpointToLoad = f"checkpoints\\Crawler-TESTING-150k.pth"
 checkpointIDsubstring = "TESTING"
 customArchitecture = True
 actorArchitecture = {"preActor1D": [512, 256], "preActor3D": [16, 32, 32], "actorContinuous": [128], "actorDiscrete": [256]}
 criticArchitecture = {"preCritic1D": [512, 256], "preCritic3D": [16, 32, 32], "criticFinal": [128]}
 
-def layer_init(layer, bias_const=0.0):
-    nn.init.kaiming_normal_(layer.weight)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.backends.cudnn.deterministic = torch_deterministic
+seedEverything(seed, torchDeterministic)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # env = UnityInterface("Builds\\Windows\\Ball3D\\UnityEnvironment", seed=seed)              # 1D obs only, continuous action of size 2. Rewards: 0.1 for every step, -1 for fail, 100 is the max episodic return
@@ -68,28 +60,30 @@ for behavior in behaviorNames:
     totalAgentsCounts += (env.getSpecs(behavior)["AgentsCount"])
 
 actor, actorOptimizer, memory, observationBuffer, actionsBuffer, = {}, {}, {}, {}, {}
-QFunction1, QFunction2, QFunction1Target, QFunction2Target, criticOptimizer = {}, {}, {}, {}, {}
+# QFunction1, QFunction2, QFunction1Target, QFunction2Target, criticOptimizer = {}, {}, {}, {}, {}
+critic = {}
 targetEntropyC, logAlphaC, alphaC, alphaOptimizerC = {}, {}, {}, {}
 targetEntropyD, logAlphaD, alphaD, alphaOptimizerD = {}, {}, {}, {}
 for behavior in behaviorNames:
     envSpecs = env.getSpecs(behavior)
     if resume:
         checkpoint = torch.load(checkpointToLoad)
-        actorArgs, criticArgs = (envSpecs, checkpoint["actorArchitecture"]), (envSpecs, checkpoint["criticArchitecture"])
+        actorArgs, criticArgs = (envSpecs, checkpoint["actorArchitecture"]), (envSpecs, checkpoint["criticArchitecture"], criticLR, gamma, tau)
     elif customArchitecture:
-        actorArgs, criticArgs = (envSpecs, actorArchitecture), (envSpecs, criticArchitecture)
+        actorArgs, criticArgs = (envSpecs, actorArchitecture), (envSpecs, criticArchitecture, criticLR, gamma, tau)
     else:
-        actorArgs, criticArgs = (envSpecs,), (envSpecs,)
+        actorArgs, criticArgs = (envSpecs,), (envSpecs, None, criticLR, gamma, tau)
 
     actor[behavior] = SAC(*actorArgs).to(device)
     actorOptimizer[behavior] = optim.Adam(list(actor[behavior].parameters()), lr=actorLR, eps=1e-5)
-    QFunction1[behavior] = QNetwork(*criticArgs).to(device)
-    QFunction2[behavior] = QNetwork(*criticArgs).to(device)
-    QFunction1Target[behavior] = QNetwork(*criticArgs).to(device)
-    QFunction2Target[behavior] = QNetwork(*criticArgs).to(device)
-    QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
-    QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
-    criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-5)
+    critic[behavior] = SoftDoubleCritic(*criticArgs)
+    # QFunction1[behavior] = QNetwork(*criticArgs).to(device)
+    # QFunction2[behavior] = QNetwork(*criticArgs).to(device)
+    # QFunction1Target[behavior] = QNetwork(*criticArgs).to(device)
+    # QFunction2Target[behavior] = QNetwork(*criticArgs).to(device)
+    # QFunction1Target[behavior].load_state_dict(QFunction1[behavior].state_dict())
+    # QFunction2Target[behavior].load_state_dict(QFunction2[behavior].state_dict())
+    # criticOptimizer[behavior] = optim.Adam(list(QFunction1[behavior].parameters()) + list(QFunction2[behavior].parameters()), lr=criticLR, eps=1e-5)
     
     memory[behavior] = Memory(bufferSize)
     assert actor[behavior].usingContinuousActions or actor[behavior].usingDiscreteActions, "Agent not using continuous nor discrete actions, VERY BAD"
@@ -112,11 +106,7 @@ for behavior in behaviorNames:
     if resume:
         actor[behavior].load_state_dict(checkpoint["actor"])
         actorOptimizer[behavior].load_state_dict(checkpoint["actorOptimizer"])
-        QFunction1[behavior].load_state_dict(checkpoint["QFunction1"])
-        QFunction2[behavior].load_state_dict(checkpoint["QFunction2"])
-        QFunction1Target[behavior].load_state_dict(checkpoint["QFunction1Target"])
-        QFunction2Target[behavior].load_state_dict(checkpoint["QFunction2Target"])
-        criticOptimizer[behavior].load_state_dict(checkpoint["criticOptimizer"])
+        critic[behavior].loadCheckpoint(checkpoint)
         if actor[behavior].usingContinuousActions:
             logAlphaC[behavior] = checkpoint["logAlphaC"]
             alphaC[behavior] = checkpoint["alphaC"]
@@ -126,7 +116,6 @@ for behavior in behaviorNames:
             alphaD[behavior] = checkpoint["alphaD"]
             alphaOptimizerD[behavior].load_state_dict(checkpoint["alphaOptimizerD"])
 
-# FIXME: Add actions buffer continuous and discrete and test 3DBall
 observationBuffer = [None] * totalAgentsCounts
 for i in range(totalAgentsCounts):
     actionsBuffer[i] = {'continuous': None, 'discrete': None}
@@ -207,33 +196,35 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
             nextObservationsBatch   =               data.nextObservations
             
             # #################### CRITIC UPDATE
-            with torch.no_grad():
-                nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete, alphaTerm = None, None, 0, 0, 1, torch.ones(1, device=device, dtype=torch.float32)
-                if actor[behavior].usingContinuousActions:
-                    nextStateActionsContinuous, nextStateLogProbsContinuous = actor[behavior].getContinuousAction(nextObservationsBatch)
-                if actor[behavior].usingDiscreteActions:
-                    nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor[behavior].getDiscreteAction(nextObservationsBatch)
+            critic[behavior].update(actor[behavior], observationsBatch, actionsContinuousBatch, actionsDiscreteBatch, rewardsBatch, isThereNextStepBatch, nextObservationsBatch, alphaC[behavior], alphaD[behavior])
+            
+            # with torch.no_grad():
+            #     nextStateActionsContinuous, nextStateActionsDiscrete, nextStateLogProbsContinuous, nextStateLogProbsDiscrete, nextStateProbsDiscrete = None, None, 0, 0, 1
+            #     if actor[behavior].usingContinuousActions:
+            #         nextStateActionsContinuous, nextStateLogProbsContinuous = actor[behavior].getContinuousAction(nextObservationsBatch)
+            #     if actor[behavior].usingDiscreteActions:
+            #         nextStateActionsDiscrete, nextStateLogProbsDiscrete, nextStateProbsDiscrete = actor[behavior].getDiscreteAction(nextObservationsBatch)
 
-                QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
-                QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
-                minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - (alphaC[behavior]*nextStateLogProbsContinuous + alphaD[behavior]*nextStateLogProbsDiscrete))
-                if minQNextTarget.ndim > 1:
-                    minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
-                nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
+            #     QFunction1NextTarget = QFunction1Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
+            #     QFunction2NextTarget = QFunction2Target[behavior](nextObservationsBatch, nextStateActionsContinuous, nextStateActionsDiscrete)
+            #     minQNextTarget = nextStateProbsDiscrete * (torch.min(QFunction1NextTarget, QFunction2NextTarget) - (alphaC[behavior]*nextStateLogProbsContinuous + alphaD[behavior]*nextStateLogProbsDiscrete))
+            #     if minQNextTarget.ndim > 1:
+            #         minQNextTarget = torch.sum(minQNextTarget, axis=tuple(range(1, minQNextTarget.ndim)))
+            #     nextQValue = rewardsBatch + isThereNextStepBatch * gamma * minQNextTarget
                 
-            QFunction1ActionValues = QFunction1[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
-            QFunction2ActionValues = QFunction2[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
-            if actor[behavior].usingDiscreteActions:
-                QFunction1ActionValues = gatherEvaluationOfTakenActions(QFunction1ActionValues, actionsDiscreteBatch)
-                QFunction2ActionValues = gatherEvaluationOfTakenActions(QFunction2ActionValues, actionsDiscreteBatch)
-            QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
-            QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
-            criticLoss = QFunction1Loss + QFunction2Loss
-            criticOptimizer[behavior].zero_grad()
-            criticLoss.backward()
-            torch.nn.utils.clip_grad_norm_(QFunction1[behavior].parameters(), max_norm=1.0)
-            torch.nn.utils.clip_grad_norm_(QFunction2[behavior].parameters(), max_norm=1.0)
-            criticOptimizer[behavior].step()
+            # QFunction1ActionValues = QFunction1[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
+            # QFunction2ActionValues = QFunction2[behavior](observationsBatch, actionsContinuousBatch.detach() if actor[behavior].usingContinuousActions else None, actionsDiscreteBatch.detach() if actor[behavior].usingDiscreteActions else None)
+            # if actor[behavior].usingDiscreteActions:
+            #     QFunction1ActionValues = gatherEvaluationOfTakenActions(QFunction1ActionValues, actionsDiscreteBatch)
+            #     QFunction2ActionValues = gatherEvaluationOfTakenActions(QFunction2ActionValues, actionsDiscreteBatch)
+            # QFunction1Loss = F.mse_loss(QFunction1ActionValues, nextQValue)
+            # QFunction2Loss = F.mse_loss(QFunction2ActionValues, nextQValue)
+            # criticLoss = QFunction1Loss + QFunction2Loss
+            # criticOptimizer[behavior].zero_grad()
+            # criticLoss.backward()
+            # torch.nn.utils.clip_grad_norm_(QFunction1[behavior].parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(QFunction2[behavior].parameters(), max_norm=1.0)
+            # criticOptimizer[behavior].step()
 
 
 
@@ -244,9 +235,10 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
             if actor[behavior].usingDiscreteActions:
                 stateActionsDiscrete, stateLogProbsDiscrete, stateProbsDiscrete = actor[behavior].getDiscreteAction(observationsBatch)
 
-            QFunction1Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
-            QFunction2Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
-            minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
+            # QFunction1Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
+            # QFunction2Evaluation = QFunction1[behavior](observationsBatch, stateActionsContinuous, stateActionsDiscrete)
+            # minQEvaluation = torch.min(QFunction1Evaluation, QFunction2Evaluation)
+            minQEvaluation = critic[behavior].evaluate(observationsBatch, stateActionsContinuous, stateActionsDiscrete)
             actorLoss = (stateProbsDiscrete * ((alphaC[behavior]*stateLogProbsContinuous + alphaD[behavior]*stateLogProbsDiscrete) - minQEvaluation)).mean()
             actorOptimizer[behavior].zero_grad()
             actorLoss.backward()
@@ -274,16 +266,13 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
 
             # update the target networks
             if globalStep % softCriticUpdateInterval == 0:
-                for param, targetParam in zip(QFunction1[behavior].parameters(), QFunction1Target[behavior].parameters()):
-                    targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
-                for param, targetParam in zip(QFunction2[behavior].parameters(), QFunction2Target[behavior].parameters()):
-                    targetParam.data.copy_(tau * param.data + (1 - tau) * targetParam.data)
+                critic[behavior].softUpdate()
 
             if globalStep % 1000 == 0:
-                print(f"Step {behavior[:behavior.find('?')]} {globalStep:8}, Actor loss: {actorLoss:>12.4f}, QF loss: {criticLoss:>12.4f}")
+                print(f"Step {behavior[:behavior.find('?')]} {globalStep:8}, Actor loss: {actorLoss:>12.4f}, QF loss: {critic[behavior].criticLoss:>12.4f}")
 
             if globalStep % 10 == 0:
-                criticLosses.append(criticLoss)
+                criticLosses.append(critic[behavior].criticLoss)
                 actorLosses.append(actorLoss)
                 alphasC.append(alphaC[behavior])
                 alphasD.append(alphaD[behavior])
@@ -296,14 +285,10 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                         'actor': actor[behavior].state_dict(),
                         'actorOptimizer': actorOptimizer[behavior].state_dict(),
                         'actorArchitecture': actor[behavior].architecture,
-                        'QFunction1': QFunction1[behavior].state_dict(),
-                        'QFunction2': QFunction2[behavior].state_dict(),
-                        'QFunction1Target': QFunction1Target[behavior].state_dict(),
-                        'QFunction2Target': QFunction2Target[behavior].state_dict(),
-                        'criticOptimizer': criticOptimizer[behavior].state_dict(),
-                        'criticArchitecture': QFunction1[behavior].architecture,
                         'globalStep': globalStep
                     }
+
+                    checkpoint = checkpoint | critic[behavior].getDictForCheckpoint()
 
                     if actor[behavior].usingContinuousActions:
                         checkpoint["logAlphaC"] = logAlphaC[behavior]
