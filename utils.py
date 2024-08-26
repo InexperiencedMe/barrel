@@ -406,7 +406,7 @@ def getSequentialModel1D(inputSize, hiddenSizes, outputSize, finishWithActivatio
     if finishWithActivation:
         layers.append(activationFunction())
 
-    return nn.Sequential(*layers)
+    return nn.Sequential(*layers).to(device)
 
 def getSequentialModel3D(inputChannels, hiddenChannels, activationFunction = nn.Tanh):
         layers = []
@@ -421,7 +421,7 @@ def getSequentialModel3D(inputChannels, hiddenChannels, activationFunction = nn.
             kernelSize = max(3, kernelSize - 2)
 
         layers.append(nn.Flatten())
-        return nn.Sequential(*layers)
+        return nn.Sequential(*layers).to(device)
 
 
             
@@ -515,7 +515,7 @@ def exportONNX(filename, actor, envSpecs):
         dynamic_axes=dynamicAxes
     )
 
-def seedEverything(seed, torchDeterministic):
+def seedEverything(seed, torchDeterministic=False):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

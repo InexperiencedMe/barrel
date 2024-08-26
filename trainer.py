@@ -172,7 +172,7 @@ for globalStep in range(start - learningStart, start + totalTimesteps):
                 if actor[behavior].usingContinuousActions:
                     behaviorActionsForThisStep["continuous"], _ = actor[behavior].getContinuousAction(observationsThatNeedAction, withLogProbs=False)
                 if actor[behavior].usingDiscreteActions:
-                    behaviorActionsForThisStep["discrete"], _, _ = actor[behavior].getDiscreteAction((observationsThatNeedAction), withLogProbs=False)
+                    behaviorActionsForThisStep["discrete"], _, _ = actor[behavior].getDiscreteAction(observationsThatNeedAction, withLogProbs=False)
 
             # Transcribe the actions to buffer
                 for j, agent in enumerate(decisionSteps):
