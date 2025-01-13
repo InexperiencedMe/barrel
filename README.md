@@ -1,7 +1,8 @@
 # Barrel (BaRL)
 ## Raising the (lowest) bar of RL implementations
 
-Development phase. Discrete action space doesn't work, continuous action space works just fine, but we haven't tested for more than 20k steps
+Development phase. Discrete and continuous action space should work just fine. Hybrid action space doesn't work yet.
+Only SAC algorithm is implemented for now.
 
 
 ### What is it?
